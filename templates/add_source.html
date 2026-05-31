@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Add Source · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <a href="/sources">Sources</a> / <strong>New Source</strong>{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+<style>
+  .wizard-pane { min-height: 320px; }
+  .pick-map { height: 360px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+  .coord-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    background: var(--surface-2); padding: 0.4rem 0.7rem;
+    border-radius: var(--radius-sm); font-family: var(--font-mono);
+    border: 1px solid var(--border);
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Add Video Source</h1>
+    <p>Register a new camera, CCTV feed, or drone with the system.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="wizard-steps">
+    <div class="wizard-step active" id="step-1-tab"><span class="num">1</span>Source Type</div>
+    <div class="wizard-step" id="step-2-tab"><span class="num">2</span>Configuration</div>
+    <div class="wizard-step" id="step-3-tab"><span class="num">3</span>Location</div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="wizard-pane" id="step-1">
+    <p class="muted mb-2">Choose what kind of source you're connecting.</p>
+    <div class="choice-grid">
+      <div class="choice-card" data-category="camera">
+        <span class="ic"><i class="bi bi-camera-fill"></i></span>
+        <h3>Camera</h3>
+        <p>Local USB webcam or built-in laptop camera. For testing and on-device monitoring.</p>
+      </div>
+      <div class="choice-card" data-category="cctv">
+        <span class="ic"><i class="bi bi-camera-video-fill"></i></span>
+        <h3>CCTV</h3>
+        <p>Network IP camera over RTSP (Hikvision, Dahua, Axis). For fixed surveillance.</p>
+      </div>
+      <div class="choice-card" data-category="drone">
+        <span class="ic"><i class="bi bi-airplane-fill"></i></span>
+        <h3>Drone</h3>
+        <p>Aerial RTMP livestream from a drone or pre-recorded patrol footage.</p>
+      </div>
+    </div>
+
+    <div class="card-actions mt-2" style="justify-content: flex-end;">
+      <a href="/sources" class="btn btn-ghost">Cancel</a>
+      <button id="btn-step1-next" class="btn btn-primary" disabled>Continue <i class="bi bi-arrow-right"></i></button>
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="wizard-pane hidden" id="step-2">
+    <div class="form-group">
+      <label class="form-label">Source name</label>
+      <input class="form-input" id="f-name" placeholder="e.g. Aba — Ariaria Market Gate" required />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Short description (optional)</label>
+      <input class="form-input" id="f-description" placeholder="e.g. Main entrance of the market" />
+    </div>
+
+    <!-- Camera fields -->
+    <div class="category-fields hidden" data-for="camera">
+      <div class="form-group">
+        <label class="form-label">Device index</label>
+        <input class="form-input" id="f-locator-camera" value="0" />
+        <p class="form-hint">0 is the default built-in webcam. 1 or 2 for additional USB cameras.</p>
+      </div>
+    </div>
+
+    <!-- CCTV fields -->
+    <div class="category-fields hidden" data-for="cctv">
+      <div class="form-group">
+        <label class="form-label">RTSP URL</label>
+        <input class="form-input" id="f-locator-cctv"
+               placeholder="rtsp://user:password@192.168.1.20:554/Streaming/Channels/101" />
+        <p class="form-hint">Full RTSP stream URL including credentials.</p>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Vendor / Brand</label>
+          <input class="form-input" id="f-cctv-vendor" placeholder="Hikvision, Dahua, Axis, …" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">PTZ Capable?</label>
+          <select class="form-select" id="f-has-ptz">
+            <option value="false">No — fixed camera</option>
+            <option value="true">Yes — pan/tilt/zoom available</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drone fields -->
+    <div class="category-fields hidden" data-for="drone">
+      <div class="form-group">
+        <label class="form-label">Stream type</label>
+        <select class="form-select" id="f-drone-kind">
+          <option value="rtmp">RTMP live stream</option>
+          <option value="file">Pre-recorded video file</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Locator</label>
+        <input class="form-input" id="f-locator-drone"
+               placeholder="rtmp://192.168.42.10/live/drone-1  OR  /path/to/flight.mp4" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Drone model</label>
+          <input class="form-input" id="f-drone-model" placeholder="DJI Air 2S, Mavic 3, …" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Cruise altitude (m)</label>
+          <input class="form-input" id="f-altitude" type="number" min="0" step="1" placeholder="42" />
+        </div>
+      </div>
+    </div>
+
+    <div id="step2-error" class="form-error hidden"></div>
+
+    <div class="card-actions mt-2" style="justify-content: space-between;">
+      <button id="btn-step2-back" class="btn btn-ghost"><i class="bi bi-arrow-left"></i> Back</button>
+      <button id="btn-step2-next" class="btn btn-primary">Continue <i class="bi bi-arrow-right"></i></button>
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="wizard-pane hidden" id="step-3">
+    <p class="muted mb-2">Click the map to place this source. You can also type coordinates manually.</p>
+
+    <div id="pick-map" class="pick-map mb-2"></div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Latitude</label>
+        <input class="form-input" id="f-lat" type="number" step="0.000001" placeholder="5.4836" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Longitude</label>
+        <input class="form-input" id="f-lon" type="number" step="0.000001" placeholder="7.0332" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Place label</label>
+        <input class="form-input" id="f-place" placeholder="e.g. Owerri, Imo State" />
+      </div>
+    </div>
+
+    <div id="step3-error" class="form-error hidden"></div>
+
+    <div class="card-actions mt-2" style="justify-content: space-between;">
+      <button id="btn-step3-back" class="btn btn-ghost"><i class="bi bi-arrow-left"></i> Back</button>
+      <button id="btn-submit" class="btn btn-primary"><i class="bi bi-check2-circle"></i> Register Source</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script>
+let chosenCategory = null;
+let pickMap = null;
+let pickMarker = null;
+
+function showStep(n) {
+  ['1','2','3'].forEach(k => {
+    document.getElementById('step-' + k).classList.toggle('hidden', k !== String(n));
+    const tab = document.getElementById('step-' + k + '-tab');
+    tab.classList.remove('active','done');
+    if (Number(k) < n) tab.classList.add('done');
+    if (Number(k) === n) tab.classList.add('active');
+  });
+  if (n === 3 && !pickMap) initPickMap();
+}
+
+// ---- Step 1: choose category ----
+document.querySelectorAll('.choice-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.choice-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    chosenCategory = card.dataset.category;
+    document.getElementById('btn-step1-next').disabled = false;
+  });
+});
+
+document.getElementById('btn-step1-next').addEventListener('click', () => {
+  // Show only the relevant category fields
+  document.querySelectorAll('.category-fields').forEach(f => {
+    f.classList.toggle('hidden', f.dataset.for !== chosenCategory);
+  });
+  showStep(2);
+});
+
+// ---- Step 2: validate & advance ----
+document.getElementById('btn-step2-back').addEventListener('click', () => showStep(1));
+
+document.getElementById('btn-step2-next').addEventListener('click', () => {
+  const err = document.getElementById('step2-error');
+  err.classList.add('hidden');
+  const name = document.getElementById('f-name').value.trim();
+  if (!name) { err.textContent = 'Please give this source a name'; err.classList.remove('hidden'); return; }
+
+  let locator = '';
+  if (chosenCategory === 'camera') locator = document.getElementById('f-locator-camera').value.trim();
+  else if (chosenCategory === 'cctv') locator = document.getElementById('f-locator-cctv').value.trim();
+  else if (chosenCategory === 'drone') locator = document.getElementById('f-locator-drone').value.trim();
+
+  if (!locator) { err.textContent = 'Locator is required'; err.classList.remove('hidden'); return; }
+  showStep(3);
+});
+
+// ---- Step 3: map picker ----
+function initPickMap() {
+  const center = [{{ map_center_lat }}, {{ map_center_lon }}];
+  pickMap = L.map('pick-map', { attributionControl: false }).setView(center, {{ map_zoom }});
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(pickMap);
+  pickMap.on('click', (ev) => {
+    const { lat, lng } = ev.latlng;
+    setPickPoint(lat, lng);
+  });
+}
+
+function setPickPoint(lat, lng) {
+  document.getElementById('f-lat').value = lat.toFixed(6);
+  document.getElementById('f-lon').value = lng.toFixed(6);
+  if (pickMarker) pickMap.removeLayer(pickMarker);
+  const color = chosenCategory === 'drone' ? '#f472b6' : chosenCategory === 'cctv' ? '#4ade80' : '#38bdf8';
+  pickMarker = L.circleMarker([lat, lng], {
+    radius: 12, color, fillColor: color, fillOpacity: 0.4, weight: 3,
+  }).addTo(pickMap);
+}
+
+document.getElementById('btn-step3-back').addEventListener('click', () => showStep(2));
+
+// Allow typing coords too
+['f-lat','f-lon'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    const lat = parseFloat(document.getElementById('f-lat').value);
+    const lon = parseFloat(document.getElementById('f-lon').value);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      setPickPoint(lat, lon);
+      pickMap.setView([lat, lon], 14);
+    }
+  });
+});
+
+// ---- Submit ----
+document.getElementById('btn-submit').addEventListener('click', async () => {
+  const err = document.getElementById('step3-error');
+  err.classList.add('hidden');
+
+  const lat = parseFloat(document.getElementById('f-lat').value);
+  const lon = parseFloat(document.getElementById('f-lon').value);
+  if (isNaN(lat) || isNaN(lon)) {
+    err.textContent = 'Please pick a location on the map'; err.classList.remove('hidden'); return;
+  }
+
+  // Build payload
+  const payload = {
+    name: document.getElementById('f-name').value.trim(),
+    description: document.getElementById('f-description').value.trim() || null,
+    category: chosenCategory,
+    location_lat: lat,
+    location_lon: lon,
+    location_label: document.getElementById('f-place').value.trim() || null,
+  };
+
+  if (chosenCategory === 'camera') {
+    payload.kind = 'webcam';
+    payload.locator = document.getElementById('f-locator-camera').value.trim();
+  } else if (chosenCategory === 'cctv') {
+    payload.kind = 'rtsp';
+    payload.locator = document.getElementById('f-locator-cctv').value.trim();
+    payload.cctv_vendor = document.getElementById('f-cctv-vendor').value.trim() || null;
+    payload.has_ptz = document.getElementById('f-has-ptz').value === 'true';
+  } else if (chosenCategory === 'drone') {
+    payload.kind = document.getElementById('f-drone-kind').value;
+    payload.locator = document.getElementById('f-locator-drone').value.trim();
+    payload.drone_model = document.getElementById('f-drone-model').value.trim() || null;
+    const alt = parseFloat(document.getElementById('f-altitude').value);
+    payload.altitude_m = isNaN(alt) ? null : alt;
+  }
+
+  try {
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = true; btn.textContent = 'Registering…';
+    const created = await CSSA.api.post('/api/sources/', payload);
+    window.location.href = '/sources/' + created.id;
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = false; btn.textContent = 'Register Source';
+  }
+});
+</script>
+{% endblock %}

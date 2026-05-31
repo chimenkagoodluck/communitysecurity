@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Sources · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <strong>Sources</strong>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Video Sources</h1>
+    <p>All registered cameras, CCTV feeds, and drones across the community.</p>
+  </div>
+  <div class="card-actions">
+    <a href="/sources/new" class="btn btn-primary"><i class="bi bi-plus-circle"></i> Add Source</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Filter</h3>
+  </div>
+  <div style="display: flex; gap: 0.6rem;">
+    <button class="btn btn-sm" data-filter="all">All</button>
+    <button class="btn btn-sm" data-filter="camera"><span class="badge camera">Camera</span></button>
+    <button class="btn btn-sm" data-filter="cctv"><span class="badge cctv">CCTV</span></button>
+    <button class="btn btn-sm" data-filter="drone"><span class="badge drone">Drone</span></button>
+  </div>
+</div>
+
+<div id="sources-grid" class="source-grid">
+  <p class="muted">Loading…</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const CATEGORY_LABEL = { camera: 'Camera', cctv: 'CCTV', drone: 'Drone' };
+const CATEGORY_ICON  = {
+  camera: '<i class="bi bi-camera-fill"></i>',
+  cctv:   '<i class="bi bi-camera-video-fill"></i>',
+  drone:  '<i class="bi bi-airplane-fill"></i>',
+};
+
+let allSources = [];
+let currentFilter = 'all';
+
+async function load() {
+  try {
+    allSources = await CSSA.api.get('/api/sources/');
+    render();
+  } catch (err) {
+    document.getElementById('sources-grid').innerHTML =
+      `<p class="muted">Could not load sources: ${err.message}</p>`;
+  }
+}
+
+function render() {
+  const grid = document.getElementById('sources-grid');
+  const filtered = currentFilter === 'all'
+    ? allSources
+    : allSources.filter(s => s.category === currentFilter);
+
+  if (filtered.length === 0) {
+    grid.innerHTML = '<p class="muted">No sources match this filter.</p>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(s => `
+    <a href="/sources/${s.id}" class="source-card">
+      <div class="source-card-head">
+        <div>
+          <div class="name">${s.name}</div>
+          <div class="desc">${s.location_label || ''}</div>
+        </div>
+        <span class="badge ${s.category}">
+          ${CATEGORY_ICON[s.category] || '?'} ${CATEGORY_LABEL[s.category] || s.category}
+        </span>
+      </div>
+
+      <div style="font-size: 0.83rem; color: var(--muted); line-height: 1.5;">
+        ${s.description || '<em>no description</em>'}
+      </div>
+
+      <div class="meta-row">
+        <span><span class="status-dot ${s.status}"></span>${s.status}</span>
+        <span class="mono">${s.location_lat.toFixed(4)}, ${s.location_lon.toFixed(4)}</span>
+        ${s.drone_model ? `<span>· ${s.drone_model}</span>` : ''}
+        ${s.cctv_vendor ? `<span>· ${s.cctv_vendor}</span>` : ''}
+      </div>
+    </a>
+  `).join('');
+}
+
+document.querySelectorAll('button[data-filter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    currentFilter = btn.dataset.filter;
+    document.querySelectorAll('button[data-filter]').forEach(b => b.classList.remove('btn-primary'));
+    btn.classList.add('btn-primary');
+    render();
+  });
+});
+
+document.querySelector('button[data-filter="all"]').classList.add('btn-primary');
+load();
+setInterval(load, 5000);
+</script>
+{% endblock %}

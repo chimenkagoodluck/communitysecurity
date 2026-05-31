@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <style>
+    .nav-link { display: flex; align-items: center; }
+    .nav-alert-count {
+      margin-left: auto; min-width: 18px; height: 18px;
+      background: #f87171; color: #fff; font-size: 0.65rem; font-weight: 700;
+      border-radius: 9px; padding: 0 5px;
+      display: none; align-items: center; justify-content: center;
+    }
+  </style>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%2338bdf8'/%3E%3Ctext x='12' y='17' text-anchor='middle' fill='%230d1320' font-family='sans-serif' font-weight='bold' font-size='14'%3EC%3C/text%3E%3C/svg%3E" />
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% if active_page == 'login' %}
+  {# Login page renders without sidebar #}
+  {% block bare_content %}{% endblock %}
+{% else %}
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">C</div>
+        <div>
+          <span class="name">{{ app_short }}</span>
+          <span class="subtitle">Command Center</span>
+        </div>
+      </div>
+
+      <div class="nav-section">Operations</div>
+      <a href="/dashboard"
+         class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">
+        <span class="icon"><i class="bi bi-speedometer2"></i></span><span>Dashboard</span>
+      </a>
+      <a href="/sources"
+         class="nav-link {% if active_page == 'sources' %}active{% endif %}">
+        <span class="icon"><i class="bi bi-camera-video"></i></span><span>Sources</span>
+      </a>
+      <a href="/alerts"
+         class="nav-link {% if active_page == 'alerts' %}active{% endif %}">
+        <span class="icon"><i class="bi bi-bell"></i></span><span>Alerts</span>
+        <span id="alert-nav-count" class="nav-alert-count"></span>
+      </a>
+
+      <div class="nav-section">Administration</div>
+      <a href="/admin"
+         class="nav-link {% if active_page == 'admin' %}active{% endif %}">
+        <span class="icon"><i class="bi bi-gear-fill"></i></span><span>Admin</span>
+      </a>
+      <a href="/docs" target="_blank" class="nav-link">
+        <span class="icon"><i class="bi bi-code-slash"></i></span><span>API Docs</span>
+      </a>
+
+      <div class="sidebar-footer">
+        <div id="sidebar-user"></div>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <div class="breadcrumb">
+        {% block breadcrumb %}<strong>{{ app_name }}</strong>{% endblock %}
+      </div>
+      <div class="top-actions">
+        <span class="live-pill"><span class="dot"></span>LIVE</span>
+        <span class="clock" id="topbar-clock">--:--:--</span>
+      </div>
+    </header>
+
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+{% endif %}
+
+<script src="/static/js/auth.js"></script>
+<script src="/static/js/api.js"></script>
+
+<script>
+  // Auth guard on every page except /login
+  if ({{ 'true' if active_page != 'login' else 'false' }}) {
+    if (CSSA.auth.requireAuth()) {
+      CSSA.auth.renderUserWidget('sidebar-user');
+    }
+  }
+
+  // Top bar clock
+  function tickClock() {
+    const el = document.getElementById('topbar-clock');
+    if (!el) return;
+    const d = new Date();
+    el.textContent = d.toLocaleTimeString('en-GB', { hour12: false });
+  }
+  tickClock(); setInterval(tickClock, 1000);
+
+  // Alert count badge — polls every 30 s, hides when zero
+  if ({{ 'true' if active_page != 'login' else 'false' }}) {
+    async function updateAlertBadge() {
+      try {
+        const s = await CSSA.api.get('/api/alerts/summary?minutes=1440');
+        const badge = document.getElementById('alert-nav-count');
+        if (!badge) return;
+        if (s && s.new > 0) {
+          badge.textContent = s.new > 99 ? '99+' : s.new;
+          badge.style.display = 'inline-flex';
+        } else {
+          badge.style.display = 'none';
+        }
+      } catch {}
+    }
+    updateAlertBadge();
+    setInterval(updateAlertBadge, 30000);
+  }
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

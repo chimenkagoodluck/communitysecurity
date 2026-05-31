@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}Command Center · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<strong>Command Center</strong>{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+  <div>
+    <h1>Community Command Center</h1>
+    <p>Real-time multi-source surveillance across South-East Nigeria</p>
+  </div>
+  <div class="card-actions">
+    <a href="/sources/new" class="btn btn-primary"><i class="bi bi-plus-circle"></i> Add Source</a>
+    <a href="/sources" class="btn btn-ghost">Manage Sources</a>
+  </div>
+</div>
+
+<div id="alert-strip-host"></div>
+
+<div class="stats-grid">
+  <div class="stat-tile">
+    <div class="stat-label">Detections · 1h</div>
+    <div class="stat-value" id="stat-detections">—</div>
+    <div class="stat-trend muted">Across all sources</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">People</div>
+    <div class="stat-value" id="stat-person">—</div>
+    <div class="stat-trend muted">Confidence ≥ 40%</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Vehicles</div>
+    <div class="stat-value" id="stat-vehicle">—</div>
+    <div class="stat-trend muted">Cars · Trucks · Buses</div>
+  </div>
+  <div class="stat-tile danger">
+    <div class="stat-label">Fire</div>
+    <div class="stat-value" id="stat-fire">—</div>
+    <div class="stat-trend muted">Critical class</div>
+  </div>
+  <div class="stat-tile warning">
+    <div class="stat-label">Active Alerts</div>
+    <div class="stat-value" id="stat-alerts">—</div>
+    <div class="stat-trend muted">Unacknowledged</div>
+  </div>
+  <div class="stat-tile success">
+    <div class="stat-label">Sources Online</div>
+    <div class="stat-value" id="stat-online">—</div>
+    <div class="stat-trend muted">Streaming now</div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-3">
+    <div class="card" style="padding: 0.6rem;">
+      <div class="card-header" style="padding: 0.4rem 0.6rem; margin: 0;">
+        <h3 class="card-title">Coverage Map</h3>
+        <div class="card-actions">
+          <select id="window-select" class="form-select" style="width:auto; padding: 0.3rem 0.5rem; font-size:0.82rem;">
+            <option value="5">Last 5 min</option>
+            <option value="60" selected>Last hour</option>
+            <option value="360">Last 6 hours</option>
+            <option value="1440">Last 24 hours</option>
+          </select>
+        </div>
+      </div>
+      <div id="map" class="map-container" style="height: 480px; border: none;"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Recent Detections</h3>
+        <span class="badge primary" id="feed-count">0</span>
+      </div>
+      <div id="detection-feed" class="feed">
+        <p class="muted">Loading…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Source Status</h3>
+        <a href="/sources" class="btn btn-sm btn-ghost">View all →</a>
+      </div>
+      <div id="source-status-list"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Active Alerts</h3>
+        <a href="/alerts" class="btn btn-sm btn-ghost">View all →</a>
+      </div>
+      <div id="alert-list"></div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script>
+const MAP_CENTER = [{{ map_center_lat }}, {{ map_center_lon }}];
+const MAP_ZOOM = {{ map_zoom }};
+
+const map = L.map('map', { zoomControl: true, attributionControl: false })
+  .setView(MAP_CENTER, MAP_ZOOM);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19, attribution: '© OpenStreetMap · © CARTO'
+}).addTo(map);
+
+const sourcesLayer = L.layerGroup().addTo(map);
+const detectionsLayer = L.layerGroup().addTo(map);
+
+const CATEGORY_COLOR = { camera: '#38bdf8', cctv: '#4ade80', drone: '#f472b6' };
+const CLASS_COLOR = {
+  person:  '#38bdf8', vehicle: '#4ade80', fire: '#f87171',
+  motorcycle: '#fbbf24', bicycle: '#fbbf24',
+};
+const CLASS_ICON = {
+  person:     '<i class="bi bi-person-fill"></i>',
+  vehicle:    '<i class="bi bi-car-front-fill"></i>',
+  fire:       '<i class="bi bi-fire"></i>',
+  motorcycle: '<i class="bi bi-scooter"></i>',
+  bicycle:    '<i class="bi bi-bicycle"></i>',
+  fight:      '<i class="bi bi-shield-exclamation"></i>',
+  violence:   '<i class="bi bi-shield-exclamation"></i>',
+};
+
+function makeSourceMarker(s) {
+  const color = CATEGORY_COLOR[s.category] || '#94a3b8';
+  const m = L.circleMarker([s.location_lat, s.location_lon], {
+    radius: 12, color: color, fillColor: color, fillOpacity: 0.30,
+    weight: 3, opacity: 0.95,
+  });
+  const statusHtml = `<span style="color:${s.status==='streaming' ? '#4ade80' : '#94a3b8'}">●</span> ${s.status}`;
+  m.bindPopup(`
+    <strong>${s.name}</strong><br/>
+    <em>${s.location_label || ''}</em><br/>
+    <span style="text-transform:uppercase; letter-spacing:0.5px; font-size:0.78em;">${s.category}</span><br/>
+    ${statusHtml}<br/>
+    <a href="/sources/${s.id}" style="font-size:0.85em;">Open camera →</a>
+  `);
+  return m;
+}
+
+function jitterPoint(lat, lon, seed) {
+  const angle = (seed * 137) % 360 * Math.PI / 180;
+  const radius = 0.0001 + ((seed * 47) % 100) / 800_000;
+  return [lat + Math.cos(angle) * radius, lon + Math.sin(angle) * radius];
+}
+
+async function refreshAll() {
+  const minutes = parseInt(document.getElementById('window-select').value, 10);
+  try {
+    const [sources, detections, alerts, alertSummary, summary] = await Promise.all([
+      CSSA.api.get('/api/sources/'),
+      CSSA.api.get(`/api/detections/?minutes=${minutes}&limit=500`),
+      CSSA.api.get('/api/alerts/?minutes=720&limit=20'),
+      CSSA.api.get('/api/alerts/summary?minutes=720'),
+      CSSA.api.get(`/api/detections/summary?minutes=${minutes}`),
+    ]);
+    drawSources(sources);
+    drawDetections(detections);
+    drawStats(detections, alertSummary, sources, summary);
+    drawAlerts(alerts);
+    drawSourceStatus(sources);
+    drawAlertStrip(alerts);
+  } catch (err) {
+    console.error('refresh error', err);
+  }
+}
+
+function drawSources(sources) {
+  sourcesLayer.clearLayers();
+  sources.forEach(s => sourcesLayer.addLayer(makeSourceMarker(s)));
+}
+
+function drawDetections(detections) {
+  detectionsLayer.clearLayers();
+  detections.slice(0, 250).forEach((d, i) => {
+    if (d.lat == null || d.lon == null) return;
+    const [lat, lon] = jitterPoint(d.lat, d.lon, i);
+    const c = CLASS_COLOR[d.threat_class] || '#94a3b8';
+    const m = L.circleMarker([lat, lon], {
+      radius: 4, color: c, fillColor: c, fillOpacity: 0.75, weight: 1,
+    });
+    const when = new Date(d.detected_at).toLocaleTimeString('en-GB', { hour12: false });
+    m.bindPopup(`
+      <strong>${d.threat_class}</strong> (${(d.confidence * 100).toFixed(0)}%)<br/>
+      <em>${when}</em>
+    `);
+    detectionsLayer.addLayer(m);
+  });
+
+  // Feed list
+  const feed = document.getElementById('detection-feed');
+  document.getElementById('feed-count').textContent = detections.length;
+  if (detections.length === 0) {
+    feed.innerHTML = '<p class="muted">No detections in this window.</p>';
+    return;
+  }
+  feed.innerHTML = detections.slice(0, 40).map(d => {
+    const when = new Date(d.detected_at).toLocaleTimeString('en-GB', { hour12: false });
+    const icon = CLASS_ICON[d.threat_class] || '<i class="bi bi-circle-fill"></i>';
+    return `
+      <div class="feed-item">
+        <div class="feed-icon feed-class-${d.threat_class}">${icon}</div>
+        <div class="feed-body">
+          <div class="feed-line1"><strong>${d.threat_class}</strong> detected</div>
+          <div class="feed-line2">${when}</div>
+        </div>
+        <div class="feed-conf">${(d.confidence * 100).toFixed(0)}%</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function drawStats(detections, alertSummary, sources, summary) {
+  document.getElementById('stat-detections').textContent = detections.length;
+  const counts = summary.counts || {};
+  document.getElementById('stat-person').textContent = counts.person || 0;
+  document.getElementById('stat-vehicle').textContent = (counts.vehicle || 0);
+  document.getElementById('stat-fire').textContent = counts.fire || 0;
+  document.getElementById('stat-alerts').textContent = alertSummary.new || 0;
+  const online = sources.filter(s => s.status === 'streaming').length;
+  document.getElementById('stat-online').textContent = `${online}/${sources.length}`;
+}
+
+function drawAlerts(alerts) {
+  const list = document.getElementById('alert-list');
+  if (alerts.length === 0) {
+    list.innerHTML = '<p class="muted">No alerts in window.</p>';
+    return;
+  }
+  list.innerHTML = alerts.slice(0, 6).map(a => {
+    const when = new Date(a.dispatched_at).toLocaleString('en-GB', { hour12: false });
+    return `
+      <div class="alert-row">
+        <span class="alert-sev ${a.severity}">${a.severity}</span>
+        <div class="alert-body">
+          <strong>${a.title}</strong>
+          <small>${when}</small>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function drawAlertStrip(alerts) {
+  const host = document.getElementById('alert-strip-host');
+  const newCritical = alerts.find(a => (a.severity === 'critical' || a.severity === 'high') && a.status === 'new');
+  if (!newCritical) { host.innerHTML = ''; return; }
+  host.innerHTML = `
+    <div class="alert-strip">
+      <span class="pulse"></span>
+      <span class="alert-strip-text">
+        <strong>${newCritical.severity.toUpperCase()} ALERT:</strong> ${newCritical.title}
+      </span>
+      <a class="btn btn-sm btn-ghost" href="/alerts">Review</a>
+    </div>
+  `;
+}
+
+function drawSourceStatus(sources) {
+  const host = document.getElementById('source-status-list');
+  if (sources.length === 0) {
+    host.innerHTML = '<p class="muted">No sources registered.</p>';
+    return;
+  }
+  host.innerHTML = sources.slice(0, 8).map(s => `
+    <div class="feed-item">
+      <div class="feed-icon" style="background: ${CATEGORY_COLOR[s.category] || '#94a3b8'}22; color: ${CATEGORY_COLOR[s.category] || '#94a3b8'};">
+        ${s.category === 'drone' ? '<i class="bi bi-airplane-fill"></i>' : s.category === 'cctv' ? '<i class="bi bi-camera-video-fill"></i>' : '<i class="bi bi-camera-fill"></i>'}
+      </div>
+      <div class="feed-body">
+        <div class="feed-line1"><strong>${s.name}</strong></div>
+        <div class="feed-line2">${s.location_label || ''}</div>
+      </div>
+      <span class="badge ${s.status === 'streaming' ? 'success' : 'muted'}">
+        <span class="status-dot ${s.status}"></span>${s.status}
+      </span>
+    </div>
+  `).join('');
+}
+
+document.getElementById('window-select').addEventListener('change', refreshAll);
+refreshAll();
+setInterval(refreshAll, 3000);
+</script>
+{% endblock %}

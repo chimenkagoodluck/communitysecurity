@@ -1,0 +1,503 @@
+{% extends "base.html" %}
+{% block title %}Live View · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <a href="/sources">Sources</a> / <strong id="bc-name">Loading…</strong>{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+<style>
+  .telemetry-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.6rem; margin-top: 0.6rem;
+  }
+  .telemetry-grid .cell {
+    background: var(--surface-2); padding: 0.6rem 0.75rem;
+    border-radius: var(--radius-sm); border: 1px solid var(--border-soft);
+  }
+  .telemetry-grid .cell .label {
+    color: var(--muted); font-size: 0.7rem;
+    text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+  }
+  .telemetry-grid .cell .value {
+    font-family: var(--font-mono); font-size: 1.05rem;
+    color: var(--text); margin-top: 0.2rem;
+  }
+  .signal-bars {
+    display: inline-flex; gap: 2px; align-items: flex-end; height: 14px;
+  }
+  .signal-bars span {
+    display: block; width: 3px; background: var(--success); border-radius: 1px;
+  }
+  .signal-bars span:nth-child(1) { height: 4px; }
+  .signal-bars span:nth-child(2) { height: 7px; }
+  .signal-bars span:nth-child(3) { height: 10px; }
+  .signal-bars span:nth-child(4) { height: 14px; }
+
+  .mini-map { height: 200px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+
+  /* Fullscreen button — sits in the controls bar */
+  .btn-fs {
+    background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2);
+    color: white; font-size: 1rem; cursor: pointer;
+    padding: 0.15rem 0.5rem; border-radius: var(--radius-sm);
+    pointer-events: auto; transition: background 0.15s;
+    line-height: 1.4;
+  }
+  .btn-fs:hover { background: rgba(255,255,255,0.32); }
+
+  /* Fullscreen: let the video-frame fill the screen */
+  .video-frame:fullscreen,
+  .video-frame:-webkit-full-screen {
+    width: 100vw; height: 100vh;
+    aspect-ratio: unset; border-radius: 0; border: none;
+  }
+  .video-frame:fullscreen img.live-feed,
+  .video-frame:-webkit-full-screen img.live-feed {
+    width: 100%; height: 100%; object-fit: contain;
+  }
+  /* Keep overlays readable in fullscreen */
+  .video-frame:fullscreen .video-overlay,
+  .video-frame:-webkit-full-screen .video-overlay,
+  .video-frame:fullscreen .video-controls-bar,
+  .video-frame:-webkit-full-screen .video-controls-bar { pointer-events: auto; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 id="page-title">Loading…</h1>
+    <p id="page-subtitle" class="muted">—</p>
+  </div>
+  <div class="card-actions">
+    <button id="btn-start" class="btn btn-success"><i class="bi bi-play-fill"></i> Start Monitoring</button>
+    <button id="btn-stop"  class="btn btn-danger hidden"><i class="bi bi-stop-fill"></i> Stop</button>
+    <a href="/sources" class="btn btn-ghost"><i class="bi bi-arrow-left"></i> Back</a>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-2">
+    <!-- LIVE VIDEO -->
+    <div class="card" style="padding: 0.6rem;">
+      <div class="card-header" style="padding: 0.4rem 0.6rem; margin: 0 0 0.6rem;">
+        <h3 class="card-title">Live Feed</h3>
+        <span class="badge muted" id="ingest-state">stopped</span>
+      </div>
+
+      <div class="video-frame">
+        <img id="live-feed" class="live-feed" src="" alt="Live feed" />
+        <div class="video-overlay">
+          <div class="left">
+            <span class="rec" id="rec-badge" style="display:none;"><span class="dot"></span>REC</span>
+            <span class="telemetry" id="overlay-name">—</span>
+          </div>
+          <div class="right">
+            <span class="telemetry" id="overlay-telemetry">—</span>
+          </div>
+        </div>
+        <div class="video-controls-bar">
+          <span class="live-info" id="overlay-coords">—</span>
+          <span class="live-info" id="overlay-time">--:--:--</span>
+          <button id="btn-fullscreen" class="btn-fs" title="Toggle fullscreen"><i class="bi bi-fullscreen"></i></button>
+        </div>
+      </div>
+
+      <!-- Source-type-specific telemetry row -->
+      <div id="telemetry-host"></div>
+    </div>
+
+    <!-- Recent detections for this source -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Detection Log</h3>
+        <span class="badge primary" id="det-count">0</span>
+      </div>
+      <div id="det-list" class="feed"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <!-- Source info + map + actions -->
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Source Details</h3>
+        <span class="badge" id="cat-badge">—</span>
+      </div>
+      <table class="data-table" style="width:100%;">
+        <tbody id="info-table"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Geo Position</h3>
+      </div>
+      <div id="mini-map" class="mini-map"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Diagnostics</h3>
+      </div>
+      <div id="diagnostics" class="feed" style="max-height: 200px;"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script>
+const SOURCE_ID = "{{ source_id }}";
+const CLASS_ICON = {
+  person:     '<i class="bi bi-person-fill"></i>',
+  vehicle:    '<i class="bi bi-car-front-fill"></i>',
+  fire:       '<i class="bi bi-fire"></i>',
+  motorcycle: '<i class="bi bi-scooter"></i>',
+  bicycle:    '<i class="bi bi-bicycle"></i>',
+};
+const CATEGORY_COLOR = { camera: '#38bdf8', cctv: '#4ade80', drone: '#f472b6' };
+const CATEGORY_LABEL = { camera: 'Camera', cctv: 'CCTV', drone: 'Drone' };
+
+let sourceData = null;
+let miniMap = null;
+let miniMarker = null;
+let liveFeedActive = false;
+
+function infoRow(k, v) {
+  return `<tr><td class="meta" style="width: 40%;">${k}</td><td>${v ?? '—'}</td></tr>`;
+}
+
+function renderSourceInfo(s) {
+  document.getElementById('bc-name').textContent = s.name;
+  document.getElementById('page-title').textContent = s.name;
+  document.getElementById('page-subtitle').textContent = s.location_label || '';
+
+  const catBadge = document.getElementById('cat-badge');
+  catBadge.className = `badge ${s.category}`;
+  catBadge.textContent = (CATEGORY_LABEL[s.category] || s.category).toUpperCase();
+
+  document.getElementById('overlay-name').textContent = s.name;
+  document.getElementById('overlay-coords').textContent =
+    `${s.location_lat.toFixed(5)}° N, ${s.location_lon.toFixed(5)}° E`;
+
+  // Info table
+  const rows = [
+    infoRow('Category', `<span class="badge ${s.category}">${CATEGORY_LABEL[s.category]}</span>`),
+    infoRow('Status', `<span class="status-dot ${s.status}"></span>${s.status}`),
+    infoRow('Locator', `<code>${s.locator}</code>`),
+    infoRow('Location', s.location_label || '—'),
+    infoRow('Latitude', s.location_lat.toFixed(5)),
+    infoRow('Longitude', s.location_lon.toFixed(5)),
+  ];
+  if (s.category === 'drone') {
+    rows.push(infoRow('Drone Model', s.drone_model || '—'));
+    rows.push(infoRow('Altitude (m)', s.altitude_m || '—'));
+  }
+  if (s.category === 'cctv') {
+    rows.push(infoRow('Vendor', s.cctv_vendor || '—'));
+    rows.push(infoRow('PTZ Capable', s.has_ptz ? 'Yes' : 'No'));
+  }
+  document.getElementById('info-table').innerHTML = rows.join('');
+
+  // Source-type-specific telemetry tiles
+  renderTelemetry(s);
+  // Mini map
+  renderMiniMap(s);
+  // Initial overlay telemetry text
+  updateOverlayTelemetry(s);
+}
+
+function renderTelemetry(s) {
+  let cells = '';
+  if (s.category === 'drone') {
+    cells = `
+      <div class="cell"><div class="label">Altitude</div><div class="value">${s.altitude_m || '—'} m</div></div>
+      <div class="cell"><div class="label">Drone Model</div><div class="value">${s.drone_model || '—'}</div></div>
+      <div class="cell"><div class="label">Battery</div><div class="value" id="t-battery">87%</div></div>
+      <div class="cell"><div class="label">GPS Lock</div><div class="value" style="color: var(--success);">●  ACQUIRED</div></div>
+      <div class="cell"><div class="label">Flight Mode</div><div class="value">PATROL</div></div>
+    `;
+  } else if (s.category === 'cctv') {
+    cells = `
+      <div class="cell">
+        <div class="label">Signal</div>
+        <div class="value">
+          <span class="signal-bars"><span></span><span></span><span></span><span></span></span> STRONG
+        </div>
+      </div>
+      <div class="cell"><div class="label">Vendor</div><div class="value">${s.cctv_vendor || '—'}</div></div>
+      <div class="cell"><div class="label">PTZ</div><div class="value">${s.has_ptz ? 'AVAILABLE' : 'FIXED'}</div></div>
+      <div class="cell"><div class="label">Codec</div><div class="value">H.264</div></div>
+      <div class="cell"><div class="label">Resolution</div><div class="value">1080p</div></div>
+    `;
+  } else {
+    cells = `
+      <div class="cell"><div class="label">Device</div><div class="value">USB Webcam</div></div>
+      <div class="cell"><div class="label">Resolution</div><div class="value">640×480</div></div>
+      <div class="cell"><div class="label">Framerate</div><div class="value">3 fps (sampled)</div></div>
+    `;
+  }
+  document.getElementById('telemetry-host').innerHTML = `<div class="telemetry-grid">${cells}</div>`;
+}
+
+function updateOverlayTelemetry(s) {
+  const el = document.getElementById('overlay-telemetry');
+  if (s.category === 'drone') {
+    el.textContent = `ALT ${s.altitude_m || '?'}m · GPS LOCK`;
+  } else if (s.category === 'cctv') {
+    el.textContent = `${s.cctv_vendor || 'CCTV'} · STRONG`;
+  } else {
+    el.textContent = 'USB CAMERA';
+  }
+}
+
+function renderMiniMap(s) {
+  if (miniMap) {
+    miniMap.setView([s.location_lat, s.location_lon], 14);
+    return;
+  }
+  miniMap = L.map('mini-map', { zoomControl: false, attributionControl: false })
+    .setView([s.location_lat, s.location_lon], 14);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(miniMap);
+  const color = CATEGORY_COLOR[s.category] || '#38bdf8';
+  miniMarker = L.circleMarker([s.location_lat, s.location_lon], {
+    radius: 12, color: color, fillColor: color, fillOpacity: 0.4, weight: 3,
+  }).addTo(miniMap);
+}
+
+// ---------- Live feed control ----------
+function connectStream() {
+  // Wire up the MJPEG stream once. Leave it connected always — the server
+  // sends the "NO SIGNAL" placeholder while idle, so there is no reason to
+  // blank src and force a costly reconnect on the next Start.
+  const img = document.getElementById('live-feed');
+  if (!img.src.includes('stream.mjpeg')) {
+    img.src = CSSA.api.streamUrl(SOURCE_ID);
+  }
+}
+
+function startLiveFeed() {
+  connectStream();
+  liveFeedActive = true;
+  document.getElementById('rec-badge').style.display = '';
+}
+
+function stopLiveFeed() {
+  // Do NOT blank img.src — keep stream connected, server serves placeholder.
+  liveFeedActive = false;
+  document.getElementById('rec-badge').style.display = 'none';
+}
+
+function setStateBadge(text, cls) {
+  const pill = document.getElementById('ingest-state');
+  pill.textContent = text;
+  pill.className = `badge ${cls}`;
+}
+
+// ---------- Fullscreen ----------
+(function () {
+  const btn = document.getElementById('btn-fullscreen');
+  const frame = document.querySelector('.video-frame');
+
+  btn.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      frame.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  });
+
+  document.addEventListener('fullscreenchange', () => {
+    btn.innerHTML = document.fullscreenElement
+      ? '<i class="bi bi-fullscreen-exit"></i>'
+      : '<i class="bi bi-fullscreen"></i>';
+    btn.title = document.fullscreenElement ? 'Exit fullscreen (Esc)' : 'Toggle fullscreen';
+  });
+
+  // Also allow double-click on the video itself
+  frame.addEventListener('dblclick', () => {
+    if (!document.fullscreenElement) {
+      frame.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  });
+})();
+
+document.getElementById('btn-start').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-start');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  setStateBadge('STARTING…', 'muted');
+  try {
+    await CSSA.api.post(`/api/ingest/start/${SOURCE_ID}`, {});
+    startLiveFeed();
+    document.getElementById('btn-start').classList.add('hidden');
+    document.getElementById('btn-stop').classList.remove('hidden');
+    setStateBadge('STREAMING', 'success');
+    addDiagnostic('Started monitoring', 'success');
+  } catch (err) {
+    setStateBadge('ERROR', 'danger');
+    addDiagnostic(`Start failed: ${err.message}`, 'danger');
+  } finally {
+    btn.disabled = false; btn.innerHTML = '<i class="bi bi-play-fill"></i> Start Monitoring';
+  }
+});
+
+document.getElementById('btn-stop').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-stop');
+  btn.disabled = true; btn.innerHTML = 'Stopping&hellip;';
+  setStateBadge('STOPPING…', 'muted');
+  try {
+    await CSSA.api.post(`/api/ingest/stop/${SOURCE_ID}`, {});
+    stopLiveFeed();
+    document.getElementById('btn-stop').classList.add('hidden');
+    document.getElementById('btn-start').classList.remove('hidden');
+    setStateBadge('IDLE', 'muted');
+    addDiagnostic('Stopped monitoring', 'muted');
+  } catch (err) {
+    setStateBadge('ERROR', 'danger');
+    addDiagnostic(`Stop failed: ${err.message}`, 'danger');
+  } finally {
+    btn.disabled = false; btn.innerHTML = '<i class="bi bi-stop-fill"></i> Stop';
+  }
+});
+
+// ---------- Refresh loops ----------
+let _lastError = null;
+async function refreshStatus() {
+  try {
+    const status = await CSSA.api.get(`/api/sources/${SOURCE_ID}/status`);
+
+    // Badge — always reflects truth from the server
+    if (status.has_live_frame) {
+      setStateBadge('STREAMING', 'success');
+    } else {
+      const s = (status.status || 'idle').toUpperCase();
+      setStateBadge(s, s === 'ERROR' ? 'danger' : 'muted');
+    }
+
+    // Auto-recover: server says live but UI thinks stopped (e.g. page reload)
+    if (status.has_live_frame && !liveFeedActive) {
+      startLiveFeed();
+      document.getElementById('btn-start').classList.add('hidden');
+      document.getElementById('btn-stop').classList.remove('hidden');
+    }
+
+    // Auto-recover: worker died on its own (crash, camera unplugged)
+    if (!status.has_live_frame && liveFeedActive && status.status === 'idle') {
+      stopLiveFeed();
+      document.getElementById('btn-stop').classList.add('hidden');
+      document.getElementById('btn-start').classList.remove('hidden');
+    }
+
+    // Log new errors once (don't spam diagnostics on every poll)
+    if (status.last_error && status.last_error !== _lastError) {
+      _lastError = status.last_error;
+      addDiagnostic(`Error: ${status.last_error}`, 'danger');
+    } else if (!status.last_error) {
+      _lastError = null;
+    }
+  } catch (err) {
+    // silent — don't spam on transient network hiccup
+  }
+}
+
+async function refreshDetections() {
+  try {
+    const dets = await CSSA.api.get(`/api/detections/?source_id=${SOURCE_ID}&minutes=15&limit=80`);
+    document.getElementById('det-count').textContent = dets.length;
+    const list = document.getElementById('det-list');
+    if (dets.length === 0) {
+      list.innerHTML = '<p class="muted">No detections in the last 15 minutes.</p>';
+      return;
+    }
+    list.innerHTML = dets.slice(0, 50).map(d => {
+      const when = new Date(d.detected_at).toLocaleTimeString('en-GB', { hour12: false });
+      const icon = CLASS_ICON[d.threat_class] || '<i class="bi bi-circle-fill"></i>';
+      return `
+        <div class="feed-item">
+          <div class="feed-icon feed-class-${d.threat_class}">${icon}</div>
+          <div class="feed-body">
+            <div class="feed-line1"><strong>${d.threat_class}</strong></div>
+            <div class="feed-line2">${when}</div>
+          </div>
+          <div class="feed-conf">${(d.confidence * 100).toFixed(0)}%</div>
+        </div>
+      `;
+    }).join('');
+  } catch {}
+}
+
+function addDiagnostic(msg, kind) {
+  const host = document.getElementById('diagnostics');
+  if (host.querySelector('.muted-init')) host.innerHTML = '';
+  const when = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  const sevClass = kind === 'success' ? 'success' : kind === 'danger' ? 'danger' : 'muted';
+  const item = document.createElement('div');
+  item.className = 'feed-item';
+  item.innerHTML = `
+    <div class="feed-icon" style="background: var(--${sevClass}-dim, var(--surface-2)); color: var(--${sevClass}, var(--muted));">●</div>
+    <div class="feed-body">
+      <div class="feed-line1">${msg}</div>
+      <div class="feed-line2">${when}</div>
+    </div>
+  `;
+  host.prepend(item);
+  while (host.children.length > 12) host.removeChild(host.lastChild);
+}
+
+function tickOverlayTime() {
+  document.getElementById('overlay-time').textContent =
+    new Date().toLocaleTimeString('en-GB', { hour12: false });
+}
+
+// ---------- Boot ----------
+(async function init() {
+  try {
+    // Wire up the stream immediately — shows placeholder while camera warms up.
+    connectStream();
+
+    sourceData = await CSSA.api.get(`/api/sources/${SOURCE_ID}`);
+    renderSourceInfo(sourceData);
+    document.getElementById('diagnostics').innerHTML =
+      '<p class="muted muted-init">No events yet.</p>';
+
+    // Auto-start monitoring for webcam sources on page load.
+    // The camera takes 30-45 s on first use (Windows DShow cold start); by
+    // starting here the warm-up happens in the background instead of making
+    // the user click and wait. Subsequent starts after Stop are always fast
+    // (~3 s) because Windows keeps the driver warm between sessions.
+    if (sourceData.kind === 'webcam') {
+      setStateBadge('CONNECTING…', 'muted');
+      addDiagnostic('Camera warming up — first start takes ~30 s on Windows', 'muted');
+      try {
+        const res = await CSSA.api.post(`/api/ingest/start/${SOURCE_ID}`, {});
+        liveFeedActive = true;
+        document.getElementById('btn-start').classList.add('hidden');
+        document.getElementById('btn-stop').classList.remove('hidden');
+        if (!res.newly_started) {
+          // Was already running (e.g. navigated back) — treat as live
+          setStateBadge('STREAMING', 'success');
+        }
+      } catch (err) {
+        addDiagnostic(`Auto-start failed: ${err.message}`, 'danger');
+      }
+    }
+
+    refreshStatus();
+    refreshDetections();
+    setInterval(refreshStatus, 2000);
+    setInterval(refreshDetections, 3000);
+    setInterval(tickOverlayTime, 1000); tickOverlayTime();
+  } catch (err) {
+    document.getElementById('page-title').textContent = 'Source not found';
+    document.getElementById('page-subtitle').textContent = err.message;
+  }
+})();
+</script>
+{% endblock %}

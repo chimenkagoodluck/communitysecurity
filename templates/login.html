@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in · {{ app_name }}{% endblock %}
+
+{% block bare_content %}
+<div class="login-shell">
+  <div class="login-card">
+    <div class="brand-large">
+      <div class="logo-big">C</div>
+      <h1>{{ app_name }}</h1>
+      <p class="sub">Sign in to access the command center</p>
+    </div>
+
+    <form id="login-form">
+      <div class="form-group">
+        <label class="form-label" for="email">Email</label>
+        <input class="form-input" type="email" id="email" name="email"
+               value="admin@cssa.app" autocomplete="username" required />
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="password">Password</label>
+        <input class="form-input" type="password" id="password" name="password"
+               autocomplete="current-password" required />
+      </div>
+
+      <div id="login-error" class="form-error hidden"></div>
+
+      <button type="submit" class="btn btn-primary btn-lg" id="login-submit">
+        Sign in
+      </button>
+    </form>
+
+    <p class="muted mt-2" style="font-size:0.78rem; text-align:center;">
+      Final-year project · Clifford University · Owerrinta
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}{% endblock %}
+
+{% block scripts %}
+<script>
+  // If already authenticated, go to dashboard
+  if (CSSA.auth.isAuthenticated()) {
+    const params = new URLSearchParams(window.location.search);
+    window.location.href = params.get('next') || '/dashboard';
+  }
+
+  const form = document.getElementById('login-form');
+  const errBox = document.getElementById('login-error');
+  const submitBtn = document.getElementById('login-submit');
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    errBox.classList.add('hidden');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Signing in...';
+
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+
+    try {
+      const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!resp.ok) {
+        let msg = 'Invalid credentials';
+        try { msg = (await resp.json()).detail || msg; } catch {}
+        throw new Error(msg);
+      }
+      const data = await resp.json();
+      CSSA.auth.setSession(data.access_token, {
+        user_id: data.user_id,
+        role: data.role,
+        full_name: data.full_name,
+        email: email,
+      });
+      const params = new URLSearchParams(window.location.search);
+      window.location.href = params.get('next') || '/dashboard';
+    } catch (err) {
+      errBox.textContent = err.message || 'Sign-in failed';
+      errBox.classList.remove('hidden');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Sign in';
+    }
+  });
+</script>
+{% endblock %}

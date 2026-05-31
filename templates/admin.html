@@ -1,0 +1,383 @@
+{% extends "base.html" %}
+{% block title %}Admin · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <strong>Admin</strong>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>System Administration</h1>
+    <p>Users, system health, and operational metrics.</p>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">System Health</h3>
+        <span class="badge success">● online</span>
+      </div>
+      <table class="data-table">
+        <tbody id="system-rows">
+          <tr><td colspan="2" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Detection Thresholds</h3>
+      </div>
+      <table class="data-table">
+        <tbody id="threshold-rows">
+          <tr><td colspan="2" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Fusion Weights</h3>
+      </div>
+      <table class="data-table">
+        <tbody id="fusion-rows">
+          <tr><td colspan="2" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+      <p class="muted mt-1" style="font-size: 0.8rem;">
+        Fusion formula: <code>T = α·S<sub>A</sub> + β·S<sub>B</sub> + γ·S<sub>A</sub>·S<sub>B</sub></code>
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Active Workers</h3>
+      </div>
+      <div id="workers-list">
+        <p class="muted">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="card-title">Detections by Class</h3>
+      </div>
+      <div id="class-chart"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Data Management ──────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Data Management</h3>
+    <span class="badge muted">Admin only</span>
+  </div>
+  <div style="padding: 0 0 0.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+    <button id="btn-backup" class="btn btn-ghost"><i class="bi bi-save2"></i> Backup Now</button>
+    <button id="btn-reset"  class="btn btn-danger"><i class="bi bi-arrow-counterclockwise"></i> Reset &amp; Re-seed</button>
+    <span id="dm-msg" style="font-size:0.85rem; color: var(--muted);"></span>
+  </div>
+
+  <!-- New credentials shown after reset — must stay visible until user copies the password -->
+  <div id="reset-creds" style="display:none; background:var(--surface-2); border:2px solid var(--success);
+       border-radius:var(--radius-sm); padding:1rem 1.25rem; margin-bottom:0.75rem;">
+    <div style="color:var(--success); font-weight:700; margin-bottom:0.6rem;">
+      <i class="bi bi-check-circle-fill"></i> Reset complete — copy these credentials before leaving this page
+    </div>
+    <table style="border-collapse:collapse; font-family:var(--font-mono); font-size:0.95rem; width:100%;">
+      <tr><td style="padding:0.2rem 1rem 0.2rem 0; color:var(--muted);">Email</td><td><strong>admin@cssa.app</strong></td></tr>
+      <tr><td style="padding:0.2rem 1rem 0.2rem 0; color:var(--muted);">Password</td>
+          <td><strong id="reset-pw" style="font-size:1.1rem; letter-spacing:0.05em;"></strong></td></tr>
+    </table>
+    <div style="display:flex; gap:0.6rem; margin-top:0.9rem;">
+      <button id="btn-copy-pw" class="btn btn-success" onclick="copyResetPassword()">
+        <i class="bi bi-clipboard-check"></i> Copy Password
+      </button>
+      <a href="/login" class="btn btn-primary">
+        <i class="bi bi-box-arrow-right"></i> Go to Login
+      </a>
+    </div>
+  </div>
+
+  <!-- Backups table -->
+  <table class="data-table" id="backups-table">
+    <thead>
+      <tr>
+        <th>Backup file</th><th>Size</th><th>Created</th><th style="width:180px;"></th>
+      </tr>
+    </thead>
+    <tbody id="backups-body">
+      <tr><td colspan="4" class="muted">Loading backups…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Users</h3>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr>
+    </thead>
+    <tbody id="users-rows">
+      <tr><td colspan="4" class="muted">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function row(k, v) { return `<tr><td class="meta" style="width: 50%;">${k}</td><td>${v}</td></tr>`; }
+
+async function refresh() {
+  try {
+    const [sys, metrics, users] = await Promise.all([
+      CSSA.api.get('/api/admin/system'),
+      CSSA.api.get('/api/admin/metrics'),
+      CSSA.api.get('/api/admin/users'),
+    ]);
+
+    // System
+    const c = sys.counts;
+    document.getElementById('system-rows').innerHTML = [
+      row('Application', `<strong>${sys.app_name}</strong>`),
+      row('Environment', `<code>${sys.app_env}</code>`),
+      row('Python', sys.python_version),
+      row('Operating system', sys.system),
+      row('Users registered', c.users),
+      row('Sources registered', c.sources),
+      row('Detections (all time)', c.detections),
+      row('Detections (last hour)', `<strong style="color:var(--primary)">${c.detections_last_hour}</strong>`),
+      row('Alerts (all time)', c.alerts),
+      row('Alerts (last hour)', `<strong style="color:var(--warning)">${c.alerts_last_hour}</strong>`),
+    ].join('');
+
+    document.getElementById('threshold-rows').innerHTML = [
+      row('Spatial confidence', sys.thresholds.spatial_confidence),
+      row('Temporal anomaly', sys.thresholds.temporal_anomaly),
+      row('Fusion alert', sys.thresholds.fusion_alert),
+    ].join('');
+    document.getElementById('fusion-rows').innerHTML = [
+      row('α (spatial weight)', sys.fusion.alpha),
+      row('β (temporal weight)', sys.fusion.beta),
+      row('γ (interaction weight)', sys.fusion.gamma),
+    ].join('');
+
+    // Workers
+    const workers = sys.workers;
+    const ws = Object.entries(workers);
+    document.getElementById('workers-list').innerHTML = ws.length === 0
+      ? '<p class="muted">No active workers. Start ingestion from a source page.</p>'
+      : ws.map(([sid, st]) => `
+          <div class="feed-item">
+            <div class="feed-icon" style="background: var(--success-dim); color: var(--success);">●</div>
+            <div class="feed-body">
+              <div class="feed-line1"><code>${sid.substring(0, 8)}</code></div>
+              <div class="feed-line2">Worker</div>
+            </div>
+            <span class="badge ${st === 'running' ? 'success' : 'muted'}">${st}</span>
+          </div>
+        `).join('');
+
+    // Class chart (bar list)
+    const byClass = metrics.detections_by_class || {};
+    const total = Object.values(byClass).reduce((a, b) => a + b, 0) || 1;
+    document.getElementById('class-chart').innerHTML = Object.entries(byClass)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cls, n]) => {
+        const pct = (n / total * 100).toFixed(1);
+        const colors = { person:'#38bdf8', vehicle:'#4ade80', fire:'#f87171',
+                         motorcycle:'#fbbf24', bicycle:'#fbbf24' };
+        const color = colors[cls] || '#94a3b8';
+        return `
+          <div style="margin-bottom: 0.7rem;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.86rem; margin-bottom: 0.2rem;">
+              <span><strong>${cls}</strong></span>
+              <span class="mono">${n} (${pct}%)</span>
+            </div>
+            <div style="background: var(--surface-2); height: 8px; border-radius: 4px; overflow: hidden;">
+              <div style="background: ${color}; height: 100%; width: ${pct}%;"></div>
+            </div>
+          </div>
+        `;
+      }).join('') || '<p class="muted">No detection data yet.</p>';
+
+    // Users
+    document.getElementById('users-rows').innerHTML = users.map(u => `
+      <tr>
+        <td>${u.full_name || '—'}</td>
+        <td class="mono">${u.email}</td>
+        <td><span class="badge ${u.role === 'admin' ? 'danger' : 'primary'}">${u.role}</span></td>
+        <td>${u.is_active ? '<span class="badge success">active</span>' : '<span class="badge muted">disabled</span>'}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+refresh();
+let _refreshTimer  = setInterval(refresh, 5000);
+
+// Stop all polling — must be called before any action that invalidates the
+// current session, otherwise the next poll fires a 401 which triggers an
+// immediate logout() redirect before the user can read the new password.
+function stopPolling() {
+  clearInterval(_refreshTimer);
+  clearInterval(_backupTimer);
+  _refreshTimer = null;
+  _backupTimer  = null;
+}
+
+// ── Data Management ──────────────────────────────────────────────────────────
+function dmMsg(text, color) {
+  const el = document.getElementById('dm-msg');
+  el.innerHTML = text;
+  el.style.color = color || 'var(--muted)';
+}
+
+function copyResetPassword() {
+  const pw = document.getElementById('reset-pw').textContent;
+  const btn = document.getElementById('btn-copy-pw');
+  navigator.clipboard.writeText(pw).then(() => {
+    btn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+    setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard-check"></i> Copy Password'; }, 2500);
+  }).catch(() => {
+    // Fallback: select the text so user can Ctrl+C manually
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('reset-pw'));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  });
+}
+
+async function loadBackups() {
+  try {
+    const list = await CSSA.api.get('/api/admin/data/backups');
+    const tbody = document.getElementById('backups-body');
+    if (list.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">No backups yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(b => {
+      const when = new Date(b.created_at).toLocaleString('en-GB', { hour12: false });
+      const isReset   = b.name.includes('_pre_reset');
+      const isRestore = b.name.includes('_pre_restore');
+      const tag = isReset ? ' <span class="badge muted" style="font-size:0.65rem;">pre-reset</span>'
+                : isRestore ? ' <span class="badge muted" style="font-size:0.65rem;">pre-restore</span>' : '';
+      return `<tr>
+        <td class="mono" style="font-size:0.82rem;">${b.name}${tag}</td>
+        <td>${b.size_kb} KB</td>
+        <td>${when}</td>
+        <td style="text-align:right;">
+          <button class="btn btn-sm btn-ghost" onclick="doRestore('${b.name}')"><i class="bi bi-clock-history"></i> Restore</button>
+          <button class="btn btn-sm btn-ghost" style="color:var(--danger);" onclick="doDeleteBackup('${b.name}')"><i class="bi bi-trash3"></i></button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    document.getElementById('backups-body').innerHTML =
+      `<tr><td colspan="4" class="muted">Could not load backups: ${err.message}</td></tr>`;
+  }
+}
+
+document.getElementById('btn-backup').addEventListener('click', async () => {
+  dmMsg('Creating backup…');
+  try {
+    const r = await CSSA.api.post('/api/admin/data/backup', {});
+    dmMsg(`<i class="bi bi-check-circle-fill"></i> Backup created: ${r.backup}`, 'var(--success)');
+    loadBackups();
+  } catch (err) {
+    dmMsg(`<i class="bi bi-x-circle-fill"></i> ${err.message}`, 'var(--danger)');
+  }
+});
+
+document.getElementById('btn-reset').addEventListener('click', async () => {
+  if (!confirm(
+    'RESET ALL DATA?\n\n' +
+    'This will:\n' +
+    '  • Auto-backup the current database\n' +
+    '  • Delete ALL detections, alerts, and sources\n' +
+    '  • Re-seed fresh demo data\n' +
+    '  • Generate a NEW admin password\n\n' +
+    'You will need to log in again. Continue?'
+  )) return;
+
+  document.getElementById('reset-creds').style.display = 'none';
+  dmMsg('Resetting… please wait', 'var(--warning)');
+  document.getElementById('btn-reset').disabled = true;
+
+  try {
+    const r = await CSSA.api.post('/api/admin/data/reset', {});
+
+    // Stop ALL polling immediately — the old user no longer exists in the DB,
+    // so any subsequent API call returns 401 which would trigger an automatic
+    // logout() redirect before the user can read or copy the new password.
+    stopPolling();
+
+    document.getElementById('reset-pw').textContent = r.password;
+    document.getElementById('reset-creds').style.display = 'block';
+    document.getElementById('reset-creds').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    dmMsg(
+      `<i class="bi bi-check-circle-fill"></i> Reset done. ` +
+      `Auto-backup: ${r.auto_backup || 'none'}. Copy the password above, then click Go to Login.`,
+      'var(--success)'
+    );
+    loadBackups();
+    // Do NOT auto-logout — let the user copy the password first.
+    // The "Go to Login" button in the credentials box handles the redirect.
+  } catch (err) {
+    dmMsg(`<i class="bi bi-x-circle-fill"></i> Reset failed: ${err.message}`, 'var(--danger)');
+  } finally {
+    document.getElementById('btn-reset').disabled = false;
+  }
+});
+
+async function doRestore(name) {
+  if (!confirm(
+    `Restore from: ${name}?\n\n` +
+    'The current database will be auto-backed up first.\n' +
+    'All workers will stop. You will need to log in again.'
+  )) return;
+  dmMsg(`Restoring ${name}…`, 'var(--warning)');
+  try {
+    const r = await CSSA.api.post(`/api/admin/data/restore/${encodeURIComponent(name)}`, {});
+    // Stop polling — the restored DB may not recognise the current session
+    stopPolling();
+    dmMsg(
+      `<i class="bi bi-check-circle-fill"></i> ${r.message} &nbsp;` +
+      `<a href="/login" class="btn btn-sm btn-primary"><i class="bi bi-box-arrow-right"></i> Go to Login</a>`,
+      'var(--success)'
+    );
+    loadBackups();
+    // Do NOT auto-logout — give the user control over when to proceed.
+  } catch (err) {
+    dmMsg(`<i class="bi bi-x-circle-fill"></i> Restore failed: ${err.message}`, 'var(--danger)');
+  }
+}
+
+async function doDeleteBackup(name) {
+  if (!confirm(`Delete backup ${name}? This cannot be undone.`)) return;
+  try {
+    await CSSA.api.del(`/api/admin/data/backup/${encodeURIComponent(name)}`);
+    loadBackups();
+  } catch (err) {
+    dmMsg(`<i class="bi bi-x-circle-fill"></i> ${err.message}`, 'var(--danger)');
+  }
+}
+
+loadBackups();
+let _backupTimer = setInterval(loadBackups, 15000);
+</script>
+{% endblock %}

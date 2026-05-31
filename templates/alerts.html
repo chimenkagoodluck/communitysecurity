@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Alerts · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <strong>Alerts</strong>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Alert History</h1>
+    <p>All dispatched alerts across community sources.</p>
+  </div>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-tile danger">
+    <div class="stat-label">Critical</div>
+    <div class="stat-value" id="s-critical">—</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">High</div>
+    <div class="stat-value" id="s-high">—</div>
+  </div>
+  <div class="stat-tile warning">
+    <div class="stat-label">Medium</div>
+    <div class="stat-value" id="s-medium">—</div>
+  </div>
+  <div class="stat-tile">
+    <div class="stat-label">Low</div>
+    <div class="stat-value" id="s-low">—</div>
+  </div>
+  <div class="stat-tile success">
+    <div class="stat-label">Total · 24h</div>
+    <div class="stat-value" id="s-total">—</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Filters</h3>
+  </div>
+  <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+    <span class="muted" style="font-size: 0.82rem;">Severity:</span>
+    <button class="btn btn-sm sev-filter btn-primary" data-sev="">All</button>
+    <button class="btn btn-sm sev-filter" data-sev="critical">Critical</button>
+    <button class="btn btn-sm sev-filter" data-sev="high">High</button>
+    <button class="btn btn-sm sev-filter" data-sev="medium">Medium</button>
+    <button class="btn btn-sm sev-filter" data-sev="low">Low</button>
+
+    <span class="muted" style="margin-left: 1rem; font-size: 0.82rem;">Status:</span>
+    <button class="btn btn-sm status-filter btn-primary" data-status="">All</button>
+    <button class="btn btn-sm status-filter" data-status="new">New</button>
+    <button class="btn btn-sm status-filter" data-status="acknowledged">Acknowledged</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3 class="card-title">Alerts</h3>
+    <span class="badge muted" id="row-count">—</span>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Title</th>
+        <th>Time</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="rows">
+      <tr><td colspan="5" class="muted">Loading…</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let sevFilter = '';
+let statusFilter = '';
+
+document.querySelectorAll('.sev-filter').forEach(b => {
+  b.addEventListener('click', () => {
+    sevFilter = b.dataset.sev;
+    document.querySelectorAll('.sev-filter').forEach(x => x.classList.remove('btn-primary'));
+    b.classList.add('btn-primary');
+    refresh();
+  });
+});
+document.querySelectorAll('.status-filter').forEach(b => {
+  b.addEventListener('click', () => {
+    statusFilter = b.dataset.status;
+    document.querySelectorAll('.status-filter').forEach(x => x.classList.remove('btn-primary'));
+    b.classList.add('btn-primary');
+    refresh();
+  });
+});
+
+async function refresh() {
+  try {
+    const [alerts, summary] = await Promise.all([
+      CSSA.api.get(`/api/alerts/?minutes=1440&limit=200${sevFilter ? '&severity='+sevFilter : ''}${statusFilter ? '&status='+statusFilter : ''}`),
+      CSSA.api.get('/api/alerts/summary?minutes=1440'),
+    ]);
+
+    const by = summary.by_severity || {};
+    document.getElementById('s-critical').textContent = by.critical || 0;
+    document.getElementById('s-high').textContent = by.high || 0;
+    document.getElementById('s-medium').textContent = by.medium || 0;
+    document.getElementById('s-low').textContent = by.low || 0;
+    document.getElementById('s-total').textContent = summary.total || 0;
+
+    document.getElementById('row-count').textContent = `${alerts.length} alerts`;
+    const tbody = document.getElementById('rows');
+    if (alerts.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="muted">No alerts match the current filter.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = alerts.map(a => {
+      const when = new Date(a.dispatched_at).toLocaleString('en-GB', { hour12: false });
+      const ackBtn = a.status === 'new'
+        ? `<button class="btn btn-sm btn-success" data-ack="${a.id}">Acknowledge</button>`
+        : `<span class="badge success">${a.status}</span>`;
+      return `
+        <tr>
+          <td><span class="alert-sev ${a.severity}">${a.severity}</span></td>
+          <td>
+            <strong>${a.title}</strong>
+            <div class="meta">${a.message || ''}</div>
+          </td>
+          <td class="meta">${when}</td>
+          <td>${a.status}</td>
+          <td>${ackBtn}</td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.querySelectorAll('button[data-ack]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await CSSA.api.post(`/api/alerts/${btn.dataset.ack}/acknowledge`, {});
+          refresh();
+        } catch (e) { alert(e.message); }
+      });
+    });
+  } catch (e) {
+    document.getElementById('rows').innerHTML =
+      `<tr><td colspan="5" class="muted">Error: ${e.message}</td></tr>`;
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+{% endblock %}
