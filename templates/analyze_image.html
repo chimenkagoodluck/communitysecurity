@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Image Analysis · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <strong>Image Analysis</strong>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Image Analysis</h1>
+    <p>Upload a photo — the system detects persons, weapons (knife), and other threats, then draws boxes and lists each detection.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">Upload an image</h3></div>
+  <div style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:center;">
+    <input type="file" id="file" accept="image/*" />
+    <button class="btn btn-primary" id="analyze-btn">Analyze</button>
+    <span class="muted" id="status"></span>
+  </div>
+</div>
+
+<div style="display:grid; grid-template-columns: 2fr 1fr; gap:1rem; align-items:start;">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Annotated result</h3>
+      <span class="badge muted" id="result-summary">—</span>
+    </div>
+    <div style="text-align:center;">
+      <img id="result-img" alt="annotated result"
+           style="display:none; max-width:100%; border-radius:8px; border:1px solid var(--surface-2);" />
+      <p class="muted" id="placeholder">No image analyzed yet. Choose a file and press Analyze.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Detections</h3>
+      <span class="badge muted" id="det-count">—</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr><th>Class</th><th>Confidence</th><th>Severity</th></tr>
+      </thead>
+      <tbody id="det-rows">
+        <tr><td colspan="3" class="muted">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const fileInput = document.getElementById('file');
+const btn = document.getElementById('analyze-btn');
+const statusEl = document.getElementById('status');
+
+btn.addEventListener('click', analyze);
+fileInput.addEventListener('change', () => { statusEl.textContent = fileInput.files[0]?.name || ''; });
+
+async function analyze() {
+  const f = fileInput.files[0];
+  if (!f) { statusEl.textContent = 'Choose an image first.'; return; }
+
+  statusEl.textContent = 'Analyzing… (first run loads the model, ~10s)';
+  btn.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', f);
+    // FormData upload can't use the JSON api.js wrapper — send multipart directly.
+    const resp = await fetch('/api/analyze/image', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + (CSSA.auth.token() || '') },
+      body: fd,
+    });
+    if (resp.status === 401) { CSSA.auth.logout(); return; }
+    if (!resp.ok) {
+      let msg = 'HTTP ' + resp.status;
+      try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    render(await resp.json());
+    statusEl.textContent = 'Done.';
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function render(data) {
+  const img = document.getElementById('result-img');
+  img.src = data.annotated_image;
+  img.style.display = 'block';
+  document.getElementById('placeholder').style.display = 'none';
+
+  const s = data.summary || {};
+  document.getElementById('result-summary').textContent =
+    `${s.total} detections · ${s.harmful} harmful · max severity: ${s.max_severity || 'none'}`;
+  document.getElementById('det-count').textContent = `${data.detections.length} found`;
+
+  const tbody = document.getElementById('det-rows');
+  if (!data.detections.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">Nothing detected.</td></tr>';
+    return;
+  }
+  // Show harmful first, then by confidence.
+  const sorted = [...data.detections].sort(
+    (a, b) => (b.harmful - a.harmful) || (b.confidence - a.confidence));
+  tbody.innerHTML = sorted.map(d => `
+    <tr>
+      <td>${d.harmful ? '⚠ ' : ''}<strong>${d.class}</strong></td>
+      <td>${Math.round(d.confidence * 100)}%</td>
+      <td><span class="alert-sev ${d.severity}">${d.severity}</span></td>
+    </tr>`).join('');
+}
+</script>
+{% endblock %}

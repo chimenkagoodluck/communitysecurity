@@ -12,6 +12,7 @@ For each frame:
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -22,20 +23,20 @@ from app.config import settings
 from app.db import SessionLocal
 from app.ingest.frame_store import clear_frame, put_frame
 from app.ingest.source import SourceError, VideoSource
+from app.ml.detect import analyze_frame
 from app.ml.fire import FireDetector
-from app.ml.yolo import annotate, detect as yolo_detect, SpatialDetection
 from app.models import (
     Alert, AlertSeverity, AlertStatus, Detection, ModelSource, Source, SourceStatus,
 )
 
-# Threshold above which we auto-create an alert
-ALERT_THRESHOLD = {
-    "person": 0.85,     # noisy — only very confident
-    "vehicle": 0.80,
-    "fire": 0.50,
-    "bicycle": 0.85,
-    "motorcycle": 0.85,
-}
+# A harmful detection must clear this confidence floor before it raises an alert.
+HARMFUL_ALERT_FLOOR = 0.40
+
+# Per-alert-key cooldown so a weapon held in view doesn't flood the alerts table
+# (the worker runs at a few fps, so without this it would create alerts every frame).
+ALERT_COOLDOWN_SECONDS = 15.0
+
+PERSON_CLASSES = {"person", "armed-person"}
 
 
 class IngestWorker(threading.Thread):
@@ -49,6 +50,7 @@ class IngestWorker(threading.Thread):
         # on the second Start (when start_worker calls existing.join()).
         self._shutdown_event = threading.Event()
         self._fire = FireDetector()
+        self._last_alert_at: dict[str, float] = {}  # alert-key -> monotonic time
 
     def request_stop(self) -> None:
         self._shutdown_event.set()
@@ -90,69 +92,55 @@ class IngestWorker(threading.Thread):
             if self._shutdown_event.is_set():
                 return
 
-            spatial: list[SpatialDetection] = []
-            fire = None
+            # Single unified detection pass (YOLO + weapon model + fire +
+            # armed-person escalation), shared with image/video upload.
             try:
-                spatial = yolo_detect(frame)
+                annotated, detections = analyze_frame(frame, fire_detector=self._fire)
             except Exception as exc:
-                logger.warning(f"[{self.name}] yolo error: {exc}")
-            try:
-                fire = self._fire.detect(frame)
-            except Exception as exc:
-                logger.warning(f"[{self.name}] fire error: {exc}")
+                logger.warning(f"[{self.name}] analyze error: {exc}")
+                annotated, detections = frame, []
 
             # Push annotated frame to the live-stream store BEFORE persistence,
             # so the UI feels snappy even if DB is slow.
             try:
-                all_dets = list(spatial)
-                if fire is not None and fire.confidence >= 0.4 and fire.bbox is not None:
-                    all_dets.append(SpatialDetection(
-                        threat_class="fire", confidence=fire.confidence, bbox=fire.bbox,
-                    ))
-                annotated = annotate(frame, all_dets)
                 ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     put_frame(self.source_id, buf.tobytes())
             except Exception as exc:
-                logger.warning(f"[{self.name}] annotate/encode error: {exc}")
+                logger.warning(f"[{self.name}] encode error: {exc}")
 
-            self._persist(captured_at, spatial, fire)
+            self._persist(captured_at, detections)
 
-    def _persist(self, captured_at: datetime, spatial_list: list[SpatialDetection], fire) -> None:
+    def _persist(self, captured_at: datetime, detections: list[dict]) -> None:
         db = SessionLocal()
         try:
             src = db.query(Source).filter(Source.id == self.source_id).first()
             if not src:
                 return
 
-            new_alerts = []
-            for sd in spatial_list:
+            now_mono = time.monotonic()
+            persons: list[dict] = []
+            for d in detections:
                 det = Detection(
                     source_id=self.source_id, detected_at=captured_at,
-                    model_source=ModelSource.spatial, threat_class=sd.threat_class,
-                    confidence=sd.confidence, spatial_score=sd.confidence,
-                    bbox=sd.bbox, lat=src.location_lat, lon=src.location_lon,
+                    model_source=ModelSource.spatial, threat_class=d["class"],
+                    confidence=d["confidence"], spatial_score=d["confidence"],
+                    bbox=d["bbox"], lat=src.location_lat, lon=src.location_lon,
                 )
                 db.add(det)
                 db.flush()  # to get det.id
 
-                if sd.confidence >= ALERT_THRESHOLD.get(sd.threat_class, 0.9):
-                    new_alerts.append(self._build_alert(det, sd.threat_class, sd.confidence, src))
+                if d["class"] in PERSON_CLASSES:
+                    persons.append(d)
 
-            if fire is not None and fire.confidence >= 0.4:
-                det = Detection(
-                    source_id=self.source_id, detected_at=captured_at,
-                    model_source=ModelSource.spatial, threat_class="fire",
-                    confidence=fire.confidence, spatial_score=fire.confidence,
-                    bbox=fire.bbox, lat=src.location_lat, lon=src.location_lon,
-                )
-                db.add(det)
-                db.flush()
-                if fire.confidence >= ALERT_THRESHOLD["fire"]:
-                    new_alerts.append(self._build_alert(det, "fire", fire.confidence, src))
+                if d["harmful"] and d["confidence"] >= HARMFUL_ALERT_FLOOR \
+                        and self._cooldown_ok(d["class"], now_mono):
+                    db.add(self._build_alert(det, d, src))
 
-            for a in new_alerts:
-                db.add(a)
+            # Crowd proxy: several people clustered together -> disturbance alert.
+            if self._person_cluster(persons) >= settings.CROWD_MIN_PERSONS \
+                    and self._cooldown_ok("crowd", now_mono):
+                db.add(self._build_crowd_alert(persons, src))
 
             src.last_frame_at = captured_at
             db.commit()
@@ -162,19 +150,38 @@ class IngestWorker(threading.Thread):
         finally:
             db.close()
 
-    def _build_alert(self, detection: Detection, threat_class: str, conf: float, source) -> Alert:
-        if threat_class == "fire":
-            sev = AlertSeverity.critical if conf >= 0.7 else AlertSeverity.high
+    def _cooldown_ok(self, key: str, now_mono: float) -> bool:
+        """True if enough time has passed since the last alert with this key."""
+        if now_mono - self._last_alert_at.get(key, 0.0) >= ALERT_COOLDOWN_SECONDS:
+            self._last_alert_at[key] = now_mono
+            return True
+        return False
+
+    @staticmethod
+    def _person_cluster(persons: list[dict]) -> int:
+        """Size of the densest group of people whose box-centres are close together."""
+        centers = [(p["bbox"]["x"] + p["bbox"]["w"] / 2, p["bbox"]["y"] + p["bbox"]["h"] / 2)
+                   for p in persons if p.get("bbox")]
+        if len(centers) < settings.CROWD_MIN_PERSONS:
+            return len(centers)
+        d2 = settings.CROWD_PROXIMITY_DIST ** 2
+        best = 0
+        for cx, cy in centers:
+            n = sum(1 for ox, oy in centers if (cx - ox) ** 2 + (cy - oy) ** 2 <= d2)
+            best = max(best, n)
+        return best
+
+    def _build_alert(self, detection: Detection, d: dict, source) -> Alert:
+        cls, conf = d["class"], d["confidence"]
+        sev = AlertSeverity(d["severity"])  # severity strings match the enum values
+        if cls == "fire":
             title = f"Possible fire detected at {source.name}"
-        elif threat_class == "person" and conf >= 0.92:
-            sev = AlertSeverity.low
-            title = f"Person of interest at {source.name}"
-        elif threat_class == "vehicle":
-            sev = AlertSeverity.medium
-            title = f"Vehicle activity at {source.name}"
+        elif cls == "armed-person":
+            title = f"Armed person detected at {source.name}"
+        elif cls in ("gun", "knife", "weapon"):
+            title = f"Weapon ({cls}) detected at {source.name}"
         else:
-            sev = AlertSeverity.low
-            title = f"{threat_class.title()} detected at {source.name}"
+            title = f"{cls.title()} detected at {source.name}"
 
         return Alert(
             detection_id=detection.id,
@@ -183,7 +190,25 @@ class IngestWorker(threading.Thread):
             status=AlertStatus.new,
             title=title,
             message=(
-                f"{threat_class.title()} detected with {conf*100:.1f}% confidence "
+                f"{cls.replace('-', ' ').title()} detected with {conf * 100:.1f}% confidence "
+                f"at {source.location_label or source.name}."
+            ),
+            lat=source.location_lat,
+            lon=source.location_lon,
+        )
+
+    def _build_crowd_alert(self, persons: list[dict], source) -> Alert:
+        n = len(persons)
+        armed = any(p["class"] == "armed-person" for p in persons)
+        sev = AlertSeverity.high if armed else AlertSeverity.medium
+        return Alert(
+            source_id=source.id,
+            severity=sev,
+            status=AlertStatus.new,
+            title=f"Crowd / disturbance at {source.name}",
+            message=(
+                f"{n} people detected in proximity"
+                f"{' — armed person present' if armed else ''} "
                 f"at {source.location_label or source.name}."
             ),
             lat=source.location_lat,

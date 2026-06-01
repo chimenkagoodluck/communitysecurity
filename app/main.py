@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 
-from app.api import admin, alerts, auth, detections, ingest, sources
+from app.api import admin, alerts, analyze, auth, detections, ingest, sources
 from app.config import PROJECT_ROOT, settings
 from app.db import Base, engine
 
@@ -28,6 +28,12 @@ async def lifespan(app: FastAPI):
         logger.info("YOLOv8n model loaded")
     except Exception as exc:
         logger.warning(f"YOLO preload failed (will load on first inference): {exc}")
+    # Weapon model (optional). Logs clearly whether it loaded or fell back to COCO.
+    from app.ml.weapon import get_model as get_weapon_model
+    try:
+        await anyio.to_thread.run_sync(get_weapon_model)
+    except Exception as exc:
+        logger.warning(f"Weapon model preload failed: {exc}")
     yield
     logger.info("Shutting down")
 
@@ -41,6 +47,13 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
+
+# Annotated video-analysis outputs are written here and served (with HTTP range
+# support, so the browser <video> can seek) from /media.
+_MEDIA_DIR = PROJECT_ROOT / "data" / "analyzed"
+_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(_MEDIA_DIR)), name="media")
+
 templates = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
 
 
@@ -51,6 +64,7 @@ app.include_router(detections.router, prefix="/api/detections", tags=["detection
 app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(analyze.router, prefix="/api/analyze", tags=["analyze"])
 
 
 # ---- Page routes ----
@@ -77,6 +91,11 @@ async def login_page(request: Request):
     return templates.TemplateResponse(request, "login.html", page_ctx("login"))
 
 
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request):
+    return templates.TemplateResponse(request, "signup.html", page_ctx("signup"))
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", page_ctx("dashboard"))
@@ -90,6 +109,16 @@ async def sources_page(request: Request):
 @app.get("/sources/new", response_class=HTMLResponse)
 async def new_source_page(request: Request):
     return templates.TemplateResponse(request, "add_source.html", page_ctx("sources"))
+
+
+@app.get("/analyze/image", response_class=HTMLResponse)
+async def analyze_image_page(request: Request):
+    return templates.TemplateResponse(request, "analyze_image.html", page_ctx("analyze_image"))
+
+
+@app.get("/analyze/video", response_class=HTMLResponse)
+async def analyze_video_page(request: Request):
+    return templates.TemplateResponse(request, "analyze_video.html", page_ctx("analyze_video"))
 
 
 @app.get("/sources/{source_id}", response_class=HTMLResponse)

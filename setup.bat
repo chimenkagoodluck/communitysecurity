@@ -12,12 +12,14 @@ pip install -r requirements.txt
 if errorlevel 1 ( echo ERROR: pip install failed. & pause & exit /b 1 )
 
 echo.
-echo Creating database and seeding demo data...
+echo Creating database tables...
 python -m app.seed
-if errorlevel 1 ( echo ERROR: seed failed. & pause & exit /b 1 )
+if errorlevel 1 ( echo ERROR: database setup failed. & pause & exit /b 1 )
 
 echo.
 echo ==============================================
-echo  Setup complete. Run  run.bat  to start.
+echo  Setup complete. Run  run.bat  to start,
+echo  then open http://localhost:8000 and sign up.
+echo  The first account you create becomes the admin.
 echo ==============================================
 pause

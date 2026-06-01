@@ -97,10 +97,11 @@ def create_backup(_: User = Depends(get_current_user)):
 
 
 @router.post("/data/reset")
-def reset_and_reseed(_: User = Depends(get_current_user)):
+def reset_database(_: User = Depends(get_current_user)):
     """
-    Auto-backup, wipe ALL data, re-seed demo sources + fresh admin credentials.
-    Returns the new admin password in the response — save it immediately.
+    Auto-backup, then wipe ALL data INCLUDING users — the database is left
+    completely empty. After this you sign up again at /signup, and the first
+    account created becomes the new administrator. No demo data is created.
 
     Uses SQL DELETE instead of file deletion so the operation works on Windows
     even while the database file is held open by the current request session.
@@ -130,15 +131,10 @@ def reset_and_reseed(_: User = Depends(get_current_user)):
                 conn.execute(text(f"DELETE FROM {tbl}"))
             conn.execute(text("PRAGMA foreign_keys = ON"))
 
-        # 4. Re-seed fresh data — returns the new admin password
-        from app.seed import seed_fresh
-        new_password = seed_fresh()
-
         return {
             "ok": True,
-            "message": "Reset complete. Log in with the new credentials below.",
-            "email": "admin@cssa.app",
-            "password": new_password,
+            "message": "Reset complete. The database is empty. Sign up to create the first admin.",
+            "redirect": "/signup",
             "auto_backup": backup_name,
         }
     finally:

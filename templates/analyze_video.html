@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Video Analysis · {{ app_name }}{% endblock %}
+{% block breadcrumb %}<a href="/dashboard">Command Center</a> / <strong>Video Analysis</strong>{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Video Analysis</h1>
+    <p>Upload a video — the system samples frames, runs weapon/threat detection, writes an annotated video, and builds a timeline of detections.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3 class="card-title">Upload a video</h3></div>
+  <div style="display:flex; gap:.75rem; flex-wrap:wrap; align-items:center;">
+    <input type="file" id="file" accept="video/*" />
+    <button class="btn btn-primary" id="analyze-btn">Analyze</button>
+    <span class="muted" id="status"></span>
+  </div>
+  <p class="muted" style="margin-top:.5rem; font-size:.8rem;">
+    Processing is CPU-only and samples a few frames per second; a 10–30s clip takes roughly that long to process. Long videos are capped at the first minute.
+  </p>
+</div>
+
+<div style="display:grid; grid-template-columns: 2fr 1fr; gap:1rem; align-items:start;">
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Annotated video</h3>
+      <span class="badge muted" id="result-summary">—</span>
+    </div>
+    <div style="text-align:center;">
+      <video id="result-video" controls preload="metadata"
+             style="display:none; max-width:100%; border-radius:8px; border:1px solid var(--surface-2);"></video>
+      <p class="muted" id="placeholder">No video analyzed yet. Choose a file and press Analyze.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Detection timeline</h3>
+      <span class="badge muted" id="tl-count">—</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr><th>Time</th><th>Detections</th><th>Severity</th></tr>
+      </thead>
+      <tbody id="tl-rows">
+        <tr><td colspan="3" class="muted">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const fileInput = document.getElementById('file');
+const btn = document.getElementById('analyze-btn');
+const statusEl = document.getElementById('status');
+
+btn.addEventListener('click', analyze);
+fileInput.addEventListener('change', () => { statusEl.textContent = fileInput.files[0]?.name || ''; });
+
+async function analyze() {
+  const f = fileInput.files[0];
+  if (!f) { statusEl.textContent = 'Choose a video first.'; return; }
+
+  statusEl.textContent = 'Uploading & analyzing… this can take a while on CPU. Please wait.';
+  btn.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', f);
+    const resp = await fetch('/api/analyze/video', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + (CSSA.auth.token() || '') },
+      body: fd,
+    });
+    if (resp.status === 401) { CSSA.auth.logout(); return; }
+    if (!resp.ok) {
+      let msg = 'HTTP ' + resp.status;
+      try { const j = await resp.json(); msg = j.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    render(await resp.json());
+    statusEl.textContent = 'Done.';
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function render(data) {
+  const vid = document.getElementById('result-video');
+  vid.src = data.video_url;
+  vid.style.display = 'block';
+  document.getElementById('placeholder').style.display = 'none';
+  if (data.browser_playable === false) {
+    statusEl.textContent = 'Done (note: output may not play in-browser without ffmpeg — use the download).';
+  }
+
+  const s = data.summary || {};
+  const cls = Object.entries(s.detections_by_class || {})
+    .map(([k, v]) => `${k}:${v}`).join(', ') || 'none';
+  document.getElementById('result-summary').textContent =
+    `${s.frames_sampled} frames · ${s.duration_processed} · max severity: ${s.max_severity || 'none'}`;
+
+  const tl = data.timeline || [];
+  document.getElementById('tl-count').textContent = `${tl.length} events`;
+  const tbody = document.getElementById('tl-rows');
+  if (!tl.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No detections in sampled frames.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tl.map(e => {
+    const span = (e.t_end > e.t) ? `${e.time}–${fmt(e.t_end)}` : e.time;
+    return `
+      <tr>
+        <td class="meta">${span}</td>
+        <td>${e.harmful ? '⚠ ' : ''}<strong>${e.label}</strong></td>
+        <td><span class="alert-sev ${e.severity}">${e.severity || '—'}</span></td>
+      </tr>`;
+  }).join('');
+}
+
+function fmt(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+</script>
+{% endblock %}

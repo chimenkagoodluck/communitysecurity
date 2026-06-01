@@ -83,7 +83,7 @@
   </div>
   <div style="padding: 0 0 0.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
     <button id="btn-backup" class="btn btn-ghost"><i class="bi bi-save2"></i> Backup Now</button>
-    <button id="btn-reset"  class="btn btn-danger"><i class="bi bi-arrow-counterclockwise"></i> Reset &amp; Re-seed</button>
+    <button id="btn-reset"  class="btn btn-danger"><i class="bi bi-arrow-counterclockwise"></i> Reset (Empty Database)</button>
     <span id="dm-msg" style="font-size:0.85rem; color: var(--muted);"></span>
   </div>
 
@@ -308,10 +308,9 @@ document.getElementById('btn-reset').addEventListener('click', async () => {
     'RESET ALL DATA?\n\n' +
     'This will:\n' +
     '  • Auto-backup the current database\n' +
-    '  • Delete ALL detections, alerts, and sources\n' +
-    '  • Re-seed fresh demo data\n' +
-    '  • Generate a NEW admin password\n\n' +
-    'You will need to log in again. Continue?'
+    '  • Delete ALL data, including every user account\n' +
+    '  • Leave the database COMPLETELY EMPTY\n\n' +
+    'You will be taken to the sign-up page to create a new admin. Continue?'
   )) return;
 
   document.getElementById('reset-creds').style.display = 'none';
@@ -321,22 +320,18 @@ document.getElementById('btn-reset').addEventListener('click', async () => {
   try {
     const r = await CSSA.api.post('/api/admin/data/reset', {});
 
-    // Stop ALL polling immediately — the old user no longer exists in the DB,
-    // so any subsequent API call returns 401 which would trigger an automatic
-    // logout() redirect before the user can read or copy the new password.
+    // Stop ALL polling immediately — there are no users left in the DB, so any
+    // subsequent API call returns 401. Clear the local session and send the user
+    // to the sign-up page to create the first admin of the now-empty database.
     stopPolling();
 
-    document.getElementById('reset-pw').textContent = r.password;
-    document.getElementById('reset-creds').style.display = 'block';
-    document.getElementById('reset-creds').scrollIntoView({ behavior: 'smooth', block: 'center' });
     dmMsg(
-      `<i class="bi bi-check-circle-fill"></i> Reset done. ` +
-      `Auto-backup: ${r.auto_backup || 'none'}. Copy the password above, then click Go to Login.`,
+      `<i class="bi bi-check-circle-fill"></i> Database emptied ` +
+      `(auto-backup: ${r.auto_backup || 'none'}). Redirecting to sign up…`,
       'var(--success)'
     );
-    loadBackups();
-    // Do NOT auto-logout — let the user copy the password first.
-    // The "Go to Login" button in the credentials box handles the redirect.
+    CSSA.auth.setSession('', {});      // clear stale token
+    setTimeout(() => { window.location.href = r.redirect || '/signup'; }, 1500);
   } catch (err) {
     dmMsg(`<i class="bi bi-x-circle-fill"></i> Reset failed: ${err.message}`, 'var(--danger)');
   } finally {

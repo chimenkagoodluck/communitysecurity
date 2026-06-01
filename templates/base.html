@@ -19,8 +19,9 @@
   {% block head %}{% endblock %}
 </head>
 <body>
-{% if active_page == 'login' %}
-  {# Login page renders without sidebar #}
+{% set is_public = active_page in ['login', 'signup'] %}
+{% if is_public %}
+  {# Public pages (login / signup) render without the sidebar #}
   {% block bare_content %}{% endblock %}
 {% else %}
   <div class="app-shell">
@@ -41,6 +42,14 @@
       <a href="/sources"
          class="nav-link {% if active_page == 'sources' %}active{% endif %}">
         <span class="icon"><i class="bi bi-camera-video"></i></span><span>Sources</span>
+      </a>
+      <a href="/analyze/image"
+         class="nav-link {% if active_page == 'analyze_image' %}active{% endif %}">
+        <span class="icon"><i class="bi bi-image"></i></span><span>Image Analysis</span>
+      </a>
+      <a href="/analyze/video"
+         class="nav-link {% if active_page == 'analyze_video' %}active{% endif %}">
+        <span class="icon"><i class="bi bi-film"></i></span><span>Video Analysis</span>
       </a>
       <a href="/alerts"
          class="nav-link {% if active_page == 'alerts' %}active{% endif %}">
@@ -82,8 +91,8 @@
 <script src="/static/js/api.js"></script>
 
 <script>
-  // Auth guard on every page except /login
-  if ({{ 'true' if active_page != 'login' else 'false' }}) {
+  // Auth guard on every page except public ones (login / signup)
+  if ({{ 'false' if is_public else 'true' }}) {
     if (CSSA.auth.requireAuth()) {
       CSSA.auth.renderUserWidget('sidebar-user');
     }
@@ -99,7 +108,7 @@
   tickClock(); setInterval(tickClock, 1000);
 
   // Alert count badge — polls every 30 s, hides when zero
-  if ({{ 'true' if active_page != 'login' else 'false' }}) {
+  if ({{ 'false' if is_public else 'true' }}) {
     async function updateAlertBadge() {
       try {
         const s = await CSSA.api.get('/api/alerts/summary?minutes=1440');

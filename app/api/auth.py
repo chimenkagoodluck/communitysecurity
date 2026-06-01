@@ -56,25 +56,38 @@ def require_role(*roles: UserRole):
     return _checker
 
 
-@router.post("/register", response_model=UserOut, status_code=201)
+@router.post("/register", response_model=TokenResponse, status_code=201)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == payload.email).first():
+    """
+    Self-service signup. The database creates its own tables on startup, so the
+    first person to register becomes the administrator (bootstrap); everyone who
+    signs up after that is an operator. Returns a token so the user is logged in
+    immediately. Role is assigned server-side and cannot be chosen by the client.
+    """
+    email = payload.email.strip().lower()
+    if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    try:
-        role = UserRole(payload.role)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid role")
+
+    role = UserRole.admin if db.query(User).count() == 0 else UserRole.operator
     user = User(
-        email=payload.email, full_name=payload.full_name,
-        hashed_password=hash_password(payload.password), role=role,
+        email=email,
+        full_name=(payload.full_name or "").strip() or None,
+        hashed_password=hash_password(payload.password),
+        role=role,
     )
     db.add(user); db.commit(); db.refresh(user)
-    return user
+
+    token = create_access_token(subject=user.id, role=user.role.value)
+    return TokenResponse(
+        access_token=token, role=user.role.value,
+        user_id=user.id, full_name=user.full_name,
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
+    email = payload.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.is_active:

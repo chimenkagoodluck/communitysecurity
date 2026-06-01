@@ -33,12 +33,27 @@ class Settings(BaseSettings):
     TEMPORAL_ANOMALY_THRESHOLD: float = 0.55
     FUSION_ALERT_THRESHOLD: float = 0.55
 
+    # Dedicated weapon model (gun/knife). If the .pt file named here is not found
+    # in the project root, weapon detection is disabled and the system falls back
+    # to COCO 'knife' + person (still flagged as armed-person). See BLOCK 2 docs.
+    WEAPON_MODEL_PATH: str = "weapons.pt"
+    WEAPON_CONFIDENCE_THRESHOLD: float = 0.35
+
     FUSION_ALPHA: float = 0.45
     FUSION_BETA: float = 0.40
     FUSION_GAMMA: float = 0.15
 
     INGEST_TARGET_FPS: int = 3
     STREAM_FPS: int = 10  # MJPEG output rate
+
+    # Video upload analysis (BLOCK 4)
+    VIDEO_ANALYZE_FPS: int = 3      # frames per second to actually run detection on
+    VIDEO_MAX_SECONDS: int = 60     # cap processing length so CPU-only stays responsive
+
+    # Crowd proxy (BLOCK 5): >= N people clustered within PROXIMITY (normalised
+    # box-centre distance, 0..1) raises a "crowd / disturbance" alert.
+    CROWD_MIN_PERSONS: int = 4
+    CROWD_PROXIMITY_DIST: float = 0.45
 
     HOTSPOT_EPS_METERS: float = 300.0
     HOTSPOT_MIN_SAMPLES: int = 3

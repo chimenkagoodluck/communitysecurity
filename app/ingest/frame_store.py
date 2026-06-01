@@ -64,11 +64,7 @@ def put_frame(source_id: str, jpeg_bytes: bytes) -> None:
 
 def get_frame(source_id: str, max_age_seconds: float = 3.0,
               worker_running: bool = False) -> bytes:
-    """
-    Return the latest frame if fresh, otherwise a placeholder.
-    Pass worker_running=True to show 'INITIALISING CAMERA' instead of 'NO SIGNAL'
-    when a worker is active but hasn't produced a frame yet.
-    """
+   
     with _lock:
         entry = _frames.get(source_id)
     if entry is None:

@@ -19,8 +19,9 @@ TARGET_CLASSES = {
     1: "bicycle",
     2: "vehicle",
     3: "motorcycle",
-    5: "vehicle",  # bus
-    7: "vehicle",  # truck
+    5: "vehicle",   # bus
+    7: "vehicle",   # truck
+    43: "knife",    # COCO 'knife' — a harmful class even before the dedicated weapon model (BLOCK 2)
 }
 
 # Color per class (BGR) for drawing

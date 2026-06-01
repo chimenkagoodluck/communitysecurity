@@ -32,9 +32,11 @@ Open PowerShell in the project folder and run the setup script:
 ```
 
 That single command creates a Python virtual environment, installs all
-dependencies, and seeds the database with six demo camera locations across
-South-East Nigeria. At the end it prints an admin email and password — copy
-that password immediately, because it is only shown once.
+dependencies, and creates an **empty** database (just the tables). There are no
+demo cameras, sample detections, or pre-made accounts. The first time you open
+the app you **sign up** to create your account — the first account created
+becomes the administrator. Everything else (sources, detections, alerts) appears
+only through real use of the app.
 
 If you ever need a clean slate (new password, fresh data), you can reset
 everything from inside the Admin page without touching the terminal.
@@ -47,8 +49,9 @@ everything from inside the Admin page without touching the terminal.
 .\run.bat
 ```
 
-Then open **http://localhost:8000** in your browser. Log in with the
-credentials that were printed during setup.
+Then open **http://localhost:8000** in your browser. The first time, click
+**Create one** on the login page to sign up — the first account becomes the
+administrator. After that, sign in with those credentials.
 
 > The first time you start monitoring a webcam, the camera can take 30–45 seconds
 > to initialise. This is a Windows driver warm-up and only happens once per
@@ -87,9 +90,10 @@ equation weights. It also has a Data Management section where you can:
 ## Troubleshooting
 
 **"Invalid credentials" on the login page**
-The admin password is randomly generated during setup and only printed once.
-If you lost it, open the Admin page, go to Data Management, and click
-Reset & Re-seed. The new password appears on screen after the reset completes.
+Make sure you signed up first (the **Create one** link on the login page). If you
+have lost access entirely and want to start over, an existing admin can open the
+Admin page → Data Management → **Reset (Empty Database)**; this wipes everything
+and sends you to sign up again, where the first new account becomes the admin.
 
 **Webcam shows "Initialising Camera" for a long time after the page loads**
 The first open of a webcam on Windows initialises the driver, which can take
