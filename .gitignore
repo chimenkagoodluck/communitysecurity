@@ -30,6 +30,10 @@ data/
 # ---- Scratch / generated artifacts ----
 downloaded_images/
 
+# ---- Claude Code (local assistant files, not for the repo) ----
+CLAUDE.md
+.claude/
+
 # ---- IDE / editor ----
 .idea/
 .vscode/
