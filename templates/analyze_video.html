@@ -32,6 +32,9 @@
       <video id="result-video" controls preload="metadata"
              style="display:none; max-width:100%; border-radius:8px; border:1px solid var(--surface-2);"></video>
       <p class="muted" id="placeholder">No video analyzed yet. Choose a file and press Analyze.</p>
+      <p id="download-row" style="display:none; margin-top:.5rem;">
+        <a id="download-link" class="btn btn-ghost" download>⬇ Download annotated video</a>
+      </p>
     </div>
   </div>
 
@@ -95,8 +98,16 @@ function render(data) {
   vid.src = data.video_url;
   vid.style.display = 'block';
   document.getElementById('placeholder').style.display = 'none';
+
+  // Always offer a download — the in-browser <video> can't decode the mp4v
+  // fallback that gets written when ffmpeg isn't installed on the host.
+  const dl = document.getElementById('download-link');
+  dl.href = data.video_url;
+  dl.setAttribute('download', (data.filename ? data.filename.replace(/\.[^.]+$/, '') : 'analyzed') + '-annotated.mp4');
+  document.getElementById('download-row').style.display = 'block';
+
   if (data.browser_playable === false) {
-    statusEl.textContent = 'Done (note: output may not play in-browser without ffmpeg — use the download).';
+    statusEl.textContent = 'Done — ffmpeg not found on the server, so the player may be blank. Use “Download annotated video”.';
   }
 
   const s = data.summary || {};

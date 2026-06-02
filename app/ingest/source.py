@@ -16,8 +16,12 @@ from typing import Iterator, Optional
 
 import cv2
 import numpy as np
+from loguru import logger
 
 from app.models import SourceKind
+
+# How many device indices to scan when the configured webcam index is unavailable.
+_WEBCAM_SCAN_RANGE = 6
 
 
 class SourceError(RuntimeError):
@@ -25,6 +29,20 @@ class SourceError(RuntimeError):
 
 
 _IS_WINDOWS = sys.platform.startswith("win")
+
+
+def normalize_locator(locator: str) -> str:
+    """Clean a user-supplied locator.
+
+    Windows Explorer's "Copy as path" wraps the path in double quotes, and users
+    sometimes paste those quotes in. OpenCV then treats the quotes as part of the
+    filename and silently fails to open. Strip surrounding whitespace and a single
+    matching pair of wrapping quotes.
+    """
+    s = (locator or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        s = s[1:-1].strip()
+    return s
 
 
 @dataclass
@@ -45,31 +63,83 @@ class VideoSource:
         kind_value = source.kind.value if hasattr(source.kind, "value") else source.kind
         return cls(kind=kind_value, locator=source.locator)
 
+    @staticmethod
+    def _safe_to_scan() -> bool:
+        """True if at most one ingest worker is alive (i.e. only the caller).
+
+        Probing webcam indices means briefly opening captures; doing that while
+        *another* worker streams a device can hard-crash the interpreter on Windows
+        (the single-handle rule). The worker calling open() is itself counted as one
+        live worker, so we allow the scan only when the live-worker count is <= 1.
+        With other workers running we skip the scan and let the configured index
+        fail loudly instead.
+        """
+        try:
+            from app.ingest.worker import _workers, _workers_lock
+        except Exception:
+            return True
+        with _workers_lock:
+            return sum(1 for w in _workers.values() if w.is_alive()) <= 1
+
+    @staticmethod
+    def _open_webcam_index(index: int) -> Optional[cv2.VideoCapture]:
+        """Try to open one webcam index. Returns an opened capture or None."""
+        # On Windows, DirectShow opens far faster than the default MSMF backend.
+        if _IS_WINDOWS:
+            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap.release()
+                cap = cv2.VideoCapture(index)
+        else:
+            cap = cv2.VideoCapture(index)
+        if cap.isOpened():
+            return cap
+        cap.release()
+        return None
+
     def open(self) -> None:
         if self._cap is not None and self._cap.isOpened():
             return
+        # Defensive: strip wrapping quotes/whitespace so a path pasted via
+        # "Copy as path" (which adds quotes) still opens.
+        self.locator = normalize_locator(self.locator)
         if self.kind == "webcam":
             try:
                 index = int(self.locator)
             except ValueError as exc:
                 raise SourceError(f"Webcam locator must be integer: {self.locator}") from exc
-            # On Windows, DirectShow opens far faster than the default MSMF backend.
-            if _IS_WINDOWS:
-                cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    cap.release()
-                    cap = cv2.VideoCapture(index)
-            else:
-                cap = cv2.VideoCapture(index)
+
+            cap = self._open_webcam_index(index)
+            if cap is None and self._safe_to_scan():
+                # The configured index isn't present on this machine (common when a
+                # source was created on a different laptop). Fall back to the first
+                # camera that actually opens so "the system has a camera" just works.
+                # Guarded by _safe_to_scan() so we never probe a device another live
+                # worker may hold (the single-handle rule — see CLAUDE.md).
+                for alt in range(_WEBCAM_SCAN_RANGE):
+                    if alt == index:
+                        continue
+                    cap = self._open_webcam_index(alt)
+                    if cap is not None:
+                        logger.warning(
+                            f"webcam index {index} unavailable; using detected camera at index {alt}"
+                        )
+                        self.locator = str(alt)
+                        break
+            if cap is None:
+                raise SourceError(
+                    f"Could not open webcam: {index} - no camera found at that index "
+                    f"or at any index 0-{_WEBCAM_SCAN_RANGE - 1}. Is a camera connected "
+                    f"and not in use by another app?"
+                )
         else:
             cap = cv2.VideoCapture(self.locator)
-
-        if not cap.isOpened():
-            try:
-                cap.release()
-            except Exception:
-                pass
-            raise SourceError(f"Could not open {self.kind}: {self.locator}")
+            if not cap.isOpened():
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                raise SourceError(f"Could not open {self.kind}: {self.locator}")
 
         self._cap = cap
         self._native_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0

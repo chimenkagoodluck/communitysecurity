@@ -11,7 +11,7 @@ from app.config import settings
 from app.db import get_db
 from app.ingest.frame_store import get_frame, has_recent_frame
 from app.ingest.worker import worker_status as _worker_status
-from app.ingest.source import VideoSource
+from app.ingest.source import VideoSource, normalize_locator
 from app.models import Source, SourceCategory, SourceKind, SourceStatus, User
 from app.schemas import SourceCreate, SourceOut
 
@@ -40,7 +40,7 @@ def create_source(
 
     source = Source(
         name=payload.name, description=payload.description,
-        kind=kind, category=category, locator=payload.locator,
+        kind=kind, category=category, locator=normalize_locator(payload.locator),
         location_lat=payload.location_lat, location_lon=payload.location_lon,
         location_label=payload.location_label,
         drone_model=payload.drone_model, cctv_vendor=payload.cctv_vendor,
