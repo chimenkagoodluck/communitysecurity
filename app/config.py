@@ -37,7 +37,20 @@ class Settings(BaseSettings):
     # in the project root, weapon detection is disabled and the system falls back
     # to COCO 'knife' + person (still flagged as armed-person). See BLOCK 2 docs.
     WEAPON_MODEL_PATH: str = "weapons.pt"
-    WEAPON_CONFIDENCE_THRESHOLD: float = 0.35
+    # Raised from 0.35: the off-the-shelf weapon .pt is trained on ground-level
+    # close-ups and hallucinates confidently on aerial/drone crowd footage.
+    WEAPON_CONFIDENCE_THRESHOLD: float = 0.50
+
+    # ── Weapon false-positive suppression ────────────────────────────────────
+    # (B) Require a weapon box to overlap a detected person — a knife floating on
+    #     empty pavement is a hallucination. Set False to disable.
+    WEAPON_REQUIRE_PERSON: bool = True
+    # (C) Temporal persistence: only surface a weapon seen in >= MIN of the last
+    #     WINDOW sampled frames, near the same spot (normalised centre distance).
+    #     Real weapons persist across frames; FPs flicker frame-to-frame.
+    WEAPON_PERSIST_WINDOW: int = 6
+    WEAPON_PERSIST_MIN: int = 4
+    WEAPON_MATCH_DIST: float = 0.12
 
     FUSION_ALPHA: float = 0.45
     FUSION_BETA: float = 0.40

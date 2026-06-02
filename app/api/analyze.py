@@ -22,6 +22,7 @@ from app.api.auth import get_current_user
 from app.config import PROJECT_ROOT, settings
 from app.ml.detect import analyze_frame
 from app.ml.fire import FireDetector
+from app.ml.weapon_gate import WeaponGate
 from app.models import User
 
 router = APIRouter()
@@ -121,6 +122,7 @@ def _process_video(in_path: str, out_id: str) -> dict:
                              float(out_fps), (width, height))
 
     fire = FireDetector()  # stateful across the video for flicker-based fire scoring
+    weapon_gate = WeaponGate()  # temporal persistence -> suppresses flickering weapon FPs
     timeline: list[dict] = []
     all_severities: list[str] = []
     class_totals: dict[str, int] = {}
@@ -137,7 +139,7 @@ def _process_video(in_path: str, out_id: str) -> dict:
                 truncated = True
                 break
             if idx % stride == 0:
-                annotated, dets = analyze_frame(frame, fire_detector=fire)
+                annotated, dets = analyze_frame(frame, fire_detector=fire, weapon_gate=weapon_gate)
                 writer.write(annotated)
                 sampled += 1
                 t = idx / src_fps

@@ -25,6 +25,7 @@ from app.ingest.frame_store import clear_frame, put_frame
 from app.ingest.source import SourceError, VideoSource
 from app.ml.detect import analyze_frame
 from app.ml.fire import FireDetector
+from app.ml.weapon_gate import WeaponGate
 from app.models import (
     Alert, AlertSeverity, AlertStatus, Detection, ModelSource, Source, SourceStatus,
 )
@@ -50,6 +51,7 @@ class IngestWorker(threading.Thread):
         # on the second Start (when start_worker calls existing.join()).
         self._shutdown_event = threading.Event()
         self._fire = FireDetector()
+        self._weapon_gate = WeaponGate()  # temporal persistence -> suppresses flickering weapon FPs
         self._last_alert_at: dict[str, float] = {}  # alert-key -> monotonic time
 
     def request_stop(self) -> None:
@@ -95,7 +97,8 @@ class IngestWorker(threading.Thread):
             # Single unified detection pass (YOLO + weapon model + fire +
             # armed-person escalation), shared with image/video upload.
             try:
-                annotated, detections = analyze_frame(frame, fire_detector=self._fire)
+                annotated, detections = analyze_frame(
+                    frame, fire_detector=self._fire, weapon_gate=self._weapon_gate)
             except Exception as exc:
                 logger.warning(f"[{self.name}] analyze error: {exc}")
                 annotated, detections = frame, []

@@ -22,8 +22,10 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from app.config import settings
 from app.ml import weapon as weapon_model
 from app.ml.fire import FireDetector
+from app.ml.weapon_gate import WeaponGate
 from app.ml.yolo import detect as yolo_detect
 
 # Classes treated as harmful / threat-bearing. The dedicated weapon model
@@ -63,8 +65,16 @@ def severity_for(threat_class: str, confidence: float) -> str:
 def analyze_frame(
     frame: np.ndarray,
     fire_detector: Optional[FireDetector] = None,
+    weapon_gate: Optional[WeaponGate] = None,
 ) -> tuple[np.ndarray, list[dict]]:
-    """Run all detectors on one BGR frame and return (annotated_frame, detections)."""
+    """Run all detectors on one BGR frame and return (annotated_frame, detections).
+
+    `weapon_gate`, when supplied (video upload / live worker), suppresses weapon
+    detections that don't persist across recent frames — killing the flickering
+    false positives the weapon model produces on drone footage. Single-image
+    callers pass None (no temporal context); they still get the threshold and
+    person-overlap filters below.
+    """
     detections: list[dict] = []
 
     # 1. Spatial detection (YOLO): person / vehicle / knife / ...
@@ -109,12 +119,44 @@ def analyze_frame(
     except Exception:
         pass
 
-    # 4. Merge overlapping duplicates (e.g. COCO knife + weapon-model knife),
+    # 4. Suppress weapon false positives (covers COCO 'knife' and the weapon model):
+    #    (B) drop weapons that don't overlap a person, then
+    #    (C) drop weapons that don't persist across the recent frame window.
+    detections = _filter_weapons(detections, weapon_gate)
+
+    # 5. Merge overlapping duplicates (e.g. COCO knife + weapon-model knife),
     #    then escalate any person holding a weapon to "armed-person".
     detections = _dedupe(detections)
     detections = _escalate_armed_persons(detections)
 
     return annotate(frame, detections), detections
+
+
+def _overlaps_any_person(weapon_bbox: dict, persons: list[dict]) -> bool:
+    """True if a weapon box meaningfully overlaps any person box."""
+    return any(
+        _center_inside(weapon_bbox, p["bbox"]) or _iou(weapon_bbox, p["bbox"]) > 0.02
+        for p in persons if p.get("bbox")
+    )
+
+
+def _filter_weapons(dets: list[dict], gate: Optional[WeaponGate]) -> list[dict]:
+    """Apply the person-overlap (B) and temporal-persistence (C) gates to weapons."""
+    persons = [d for d in dets if d["class"] == "person" and d.get("bbox")]
+    weapons = [d for d in dets if d["class"] in WEAPON_CLASSES]
+    others = [d for d in dets if d["class"] not in WEAPON_CLASSES]
+
+    # (B) a weapon with no person around it is a hallucination (e.g. on pavement).
+    if settings.WEAPON_REQUIRE_PERSON:
+        weapons = [w for w in weapons
+                   if w.get("bbox") and _overlaps_any_person(w["bbox"], persons)]
+
+    # (C) require temporal persistence. Always call the gate (even with an empty
+    #     list) so its sliding window keeps advancing and gaps count as misses.
+    if gate is not None:
+        weapons = gate.confirm(weapons)
+
+    return others + weapons
 
 
 # ── Box geometry helpers (operate on normalised {x,y,w,h} boxes) ──────────────
