@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     WEAPON_MATCH_DIST: float = 0.12
 
     
-    WEAPON_IMAGE_CONFIDENCE_THRESHOLD: float = 0.50
+    WEAPON_IMAGE_CONFIDENCE_THRESHOLD: float = 0.35
     WEAPON_IMAGE_SCALES: list[int] = [640]
     WEAPON_IMAGE_TTA: bool = False
 
