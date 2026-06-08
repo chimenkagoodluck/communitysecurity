@@ -1,20 +1,3 @@
-"""
-Unified per-frame analysis — the single detection entry point for the whole app.
-
-    analyze_frame(frame) -> (annotated_frame, detections)
-
-where each detection is a plain dict:
-    {
-      "class":      str,                       # e.g. "person", "knife", "fire"
-      "confidence": float,                     # 0..1
-      "bbox":       {"x","y","w","h"},         # normalised 0..1
-      "harmful":    bool,                      # threat-bearing class?
-      "severity":   "low"|"medium"|"high"|"critical",
-    }
-
-This is reused by the image-upload endpoint, the video-upload endpoint, and
-(BLOCK 5) the live ingestion worker, so detection logic lives in exactly one place.
-"""
 from __future__ import annotations
 
 from typing import Optional
@@ -28,15 +11,14 @@ from app.ml.fire import FireDetector
 from app.ml.weapon_gate import WeaponGate
 from app.ml.yolo import detect as yolo_detect
 
-# Classes treated as harmful / threat-bearing. The dedicated weapon model
-# (BLOCK 2) adds gun/pistol/rifle/weapon; "knife" already comes from COCO.
+
 HARMFUL_CLASSES = {"gun", "pistol", "rifle", "weapon", "knife", "machete", "fire"}
 
 # Weapon classes used by the person+weapon escalation rule.
 WEAPON_CLASSES = {"gun", "pistol", "rifle", "weapon", "knife", "machete"}
 _FIREARM_CLASSES = {"gun", "pistol", "rifle", "weapon"}
 
-# Box colour by severity (BGR). Harmful detections stand out in red/orange.
+
 _SEV_COLOR = {
     "critical": (60, 60, 240),    # red
     "high":     (60, 130, 245),   # orange
@@ -66,18 +48,12 @@ def analyze_frame(
     frame: np.ndarray,
     fire_detector: Optional[FireDetector] = None,
     weapon_gate: Optional[WeaponGate] = None,
+    high_recall: bool = False,
 ) -> tuple[np.ndarray, list[dict]]:
-    """Run all detectors on one BGR frame and return (annotated_frame, detections).
-
-    `weapon_gate`, when supplied (video upload / live worker), suppresses weapon
-    detections that don't persist across recent frames — killing the flickering
-    false positives the weapon model produces on drone footage. Single-image
-    callers pass None (no temporal context); they still get the threshold and
-    person-overlap filters below.
-    """
+   
     detections: list[dict] = []
 
-    # 1. Spatial detection (YOLO): person / vehicle / knife / ...
+   
     try:
         for sd in yolo_detect(frame):
             detections.append({
@@ -90,21 +66,26 @@ def analyze_frame(
     except Exception:
         pass
 
-    # 2. Dedicated weapon model (gun/knife) — runs alongside COCO. No-op if the
-    #    weapon .pt isn't installed; COCO 'knife' above still provides a weapon class.
+   
+    if high_recall:
+        wconf, wtta = settings.WEAPON_IMAGE_CONFIDENCE_THRESHOLD, settings.WEAPON_IMAGE_TTA
+        wscales = settings.WEAPON_IMAGE_SCALES or [None]
+    else:
+        wconf, wtta, wscales = None, False, [None]   # single native-size pass
     try:
-        for wd in weapon_model.detect(frame):
-            detections.append({
-                "class": wd.threat_class,
-                "confidence": round(wd.confidence, 4),
-                "bbox": wd.bbox,
-                "harmful": True,
-                "severity": severity_for(wd.threat_class, wd.confidence),
-            })
+        for s in wscales:
+            for wd in weapon_model.detect(frame, conf=wconf, imgsz=s, augment=wtta):
+                detections.append({
+                    "class": wd.threat_class,
+                    "confidence": round(wd.confidence, 4),
+                    "bbox": wd.bbox,
+                    "harmful": True,
+                    "severity": severity_for(wd.threat_class, wd.confidence),
+                })
     except Exception:
         pass
 
-    # 3. Fire detection (HSV colour + temporal flicker heuristic)
+  
     fd = fire_detector or _default_fire
     try:
         fire = fd.detect(frame)
@@ -119,13 +100,10 @@ def analyze_frame(
     except Exception:
         pass
 
-    # 4. Suppress weapon false positives (covers COCO 'knife' and the weapon model):
-    #    (B) drop weapons that don't overlap a person, then
-    #    (C) drop weapons that don't persist across the recent frame window.
-    detections = _filter_weapons(detections, weapon_gate)
+  
+    detections = _filter_weapons(detections, weapon_gate, require_person=not high_recall)
 
-    # 5. Merge overlapping duplicates (e.g. COCO knife + weapon-model knife),
-    #    then escalate any person holding a weapon to "armed-person".
+   
     detections = _dedupe(detections)
     detections = _escalate_armed_persons(detections)
 
@@ -133,33 +111,34 @@ def analyze_frame(
 
 
 def _overlaps_any_person(weapon_bbox: dict, persons: list[dict]) -> bool:
-    """True if a weapon box meaningfully overlaps any person box."""
+   
     return any(
         _center_inside(weapon_bbox, p["bbox"]) or _iou(weapon_bbox, p["bbox"]) > 0.02
         for p in persons if p.get("bbox")
     )
 
 
-def _filter_weapons(dets: list[dict], gate: Optional[WeaponGate]) -> list[dict]:
+def _filter_weapons(
+    dets: list[dict], gate: Optional[WeaponGate], require_person: bool = True
+) -> list[dict]:
     """Apply the person-overlap (B) and temporal-persistence (C) gates to weapons."""
     persons = [d for d in dets if d["class"] == "person" and d.get("bbox")]
     weapons = [d for d in dets if d["class"] in WEAPON_CLASSES]
     others = [d for d in dets if d["class"] not in WEAPON_CLASSES]
 
-    # (B) a weapon with no person around it is a hallucination (e.g. on pavement).
-    if settings.WEAPON_REQUIRE_PERSON:
+ 
+    if require_person and settings.WEAPON_REQUIRE_PERSON:
         weapons = [w for w in weapons
                    if w.get("bbox") and _overlaps_any_person(w["bbox"], persons)]
 
-    # (C) require temporal persistence. Always call the gate (even with an empty
-    #     list) so its sliding window keeps advancing and gaps count as misses.
+   
     if gate is not None:
         weapons = gate.confirm(weapons)
 
     return others + weapons
 
 
-# ── Box geometry helpers (operate on normalised {x,y,w,h} boxes) ──────────────
+
 
 def _iou(a: dict, b: dict) -> float:
     ax2, ay2 = a["x"] + a["w"], a["y"] + a["h"]
@@ -180,7 +159,7 @@ def _center_inside(inner: dict, outer: dict) -> bool:
 
 
 def _dedupe(dets: list[dict]) -> list[dict]:
-    """Drop near-duplicate boxes of the same class, keeping the highest confidence."""
+
     out: list[dict] = []
     for d in sorted(dets, key=lambda x: x["confidence"], reverse=True):
         if any(k["class"] == d["class"] and d.get("bbox") and k.get("bbox")
@@ -191,7 +170,7 @@ def _dedupe(dets: list[dict]) -> list[dict]:
 
 
 def _escalate_armed_persons(dets: list[dict]) -> list[dict]:
-    """A person overlapping a weapon becomes an 'armed-person' (high/critical)."""
+    
     weapons = [d for d in dets if d["class"] in WEAPON_CLASSES and d.get("bbox")]
     if not weapons:
         return dets
@@ -224,7 +203,7 @@ def annotate(frame: np.ndarray, detections: list[dict]) -> np.ndarray:
         thickness = 3 if d.get("harmful") else 2
         cv2.rectangle(img, (x, y), (x + bw, y + bh), color, thickness)
 
-        # cv2's Hershey font can't render emoji, so flag harmful boxes with "! ".
+      
         prefix = "! " if d.get("harmful") else ""
         label = f"{prefix}{d['class']} {int(d['confidence'] * 100)}%"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)

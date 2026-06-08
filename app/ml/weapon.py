@@ -1,15 +1,3 @@
-"""
-Dedicated weapon detector (gun / knife), loaded ALONGSIDE the COCO yolov8n model.
-
-This is intentionally model-agnostic: weapon models on Roboflow Universe / Hugging
-Face label their classes inconsistently ("Handgun", "pistol", "Knife", "weapon",
-"gun-knife", ...). We read whatever `model.names` the downloaded .pt declares and
-normalise each to one of our canonical classes: "gun", "knife", or "weapon".
-
-Drop any YOLOv8 weapon .pt into the project root named `weapons.pt`
-(or set WEAPON_MODEL_PATH in .env). If the file is missing, detect() returns []
-and the rest of the system keeps working with COCO knife + person.
-"""
 from __future__ import annotations
 
 from threading import Lock
@@ -31,15 +19,19 @@ def _canonical_class(name: str) -> str | None:
     if any(k in n for k in ("pistol", "handgun", "hand gun", "revolver", "firearm",
                             "rifle", "shotgun", "gun")):
         return "gun"
-    if any(k in n for k in ("knife", "machete", "blade", "dagger", "sword")):
+   
+    if any(k in n for k in ("machete", "matchet", "celurit", "clurit", "panga",
+                            "parang", "golok", "cutlass")):
+        return "machete"
+    if any(k in n for k in ("knife", "blade", "dagger", "sword")):
         return "knife"
     if any(k in n for k in ("weapon", "grenade", "explos", "bomb")):
         return "weapon"
-    return None  # ignore non-weapon classes (e.g. a 'person' class in the weapon model)
+    return None  
 
 
 def get_model():
-    """Lazily load the weapon model. Returns None if no weapon .pt is present."""
+   
     global _model, _load_attempted
     if _model is not None:
         return _model
@@ -74,12 +66,21 @@ def available() -> bool:
     return get_model() is not None
 
 
-def detect(frame: np.ndarray) -> list[SpatialDetection]:
-    """Run the weapon model on a BGR frame. Returns [] if no model is loaded."""
+def detect(
+    frame: np.ndarray,
+    conf: float | None = None,
+    imgsz: int | None = None,
+    augment: bool = False,
+) -> list[SpatialDetection]:
+    
     model = get_model()
     if model is None:
         return []
-    results = model.predict(frame, conf=settings.WEAPON_CONFIDENCE_THRESHOLD, verbose=False)
+    conf = settings.WEAPON_CONFIDENCE_THRESHOLD if conf is None else conf
+    kwargs = {"conf": conf, "verbose": False, "augment": augment}
+    if imgsz is not None:
+        kwargs["imgsz"] = imgsz
+    results = model.predict(frame, **kwargs)
     if not results:
         return []
     res = results[0]

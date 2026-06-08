@@ -1,4 +1,3 @@
-"""YOLOv8n spatial detector — pretrained on COCO."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -54,9 +53,12 @@ def get_model():
     return _yolo_singleton
 
 
-def detect(frame: np.ndarray) -> list[SpatialDetection]:
+def detect(frame: np.ndarray, imgsz: int | None = None) -> list[SpatialDetection]:
     model = get_model()
-    results = model.predict(frame, conf=settings.SPATIAL_CONFIDENCE_THRESHOLD, verbose=False)
+    kwargs = {"conf": settings.SPATIAL_CONFIDENCE_THRESHOLD, "verbose": False}
+    if imgsz is not None:
+        kwargs["imgsz"] = imgsz
+    results = model.predict(frame, **kwargs)
     h, w = frame.shape[:2]
     out: list[SpatialDetection] = []
     if not results:

@@ -115,6 +115,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
 const MAP_CENTER = [{{ map_center_lat }}, {{ map_center_lon }}];
 const MAP_ZOOM = {{ map_zoom }};
@@ -127,6 +128,21 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
 
 const sourcesLayer = L.layerGroup().addTo(map);
 const detectionsLayer = L.layerGroup().addTo(map);
+const hotspotsLayer = L.layerGroup().addTo(map);
+
+// Threat heatmap (Leaflet.heat). Density of detections, weighted by confidence.
+const heatLayer = L.heatLayer([], {
+  radius: 28, blur: 20, minOpacity: 0.30, max: 1.0,
+  gradient: { 0.2: '#22d3ee', 0.45: '#4ade80', 0.7: '#fbbf24', 1.0: '#f87171' },
+}).addTo(map);
+
+// Toggle overlays on/off (sources / live detections / heatmap / hotspots).
+L.control.layers(null, {
+  'Sources': sourcesLayer,
+  'Live detections': detectionsLayer,
+  'Threat heatmap': heatLayer,
+  'Hotspots (DBSCAN)': hotspotsLayer,
+}, { collapsed: false, position: 'topright' }).addTo(map);
 
 const CATEGORY_COLOR = { camera: '#38bdf8', cctv: '#4ade80', drone: '#f472b6' };
 const CLASS_COLOR = {
@@ -169,15 +185,17 @@ function jitterPoint(lat, lon, seed) {
 async function refreshAll() {
   const minutes = parseInt(document.getElementById('window-select').value, 10);
   try {
-    const [sources, detections, alerts, alertSummary, summary] = await Promise.all([
+    const [sources, detections, alerts, alertSummary, summary, hotspots] = await Promise.all([
       CSSA.api.get('/api/sources/'),
       CSSA.api.get(`/api/detections/?minutes=${minutes}&limit=500`),
       CSSA.api.get('/api/alerts/?minutes=720&limit=20'),
       CSSA.api.get('/api/alerts/summary?minutes=720'),
       CSSA.api.get(`/api/detections/summary?minutes=${minutes}`),
+      CSSA.api.get(`/api/detections/hotspots?minutes=${minutes}`),
     ]);
     drawSources(sources);
     drawDetections(detections);
+    drawHotspots(hotspots);
     drawStats(detections, alertSummary, sources, summary);
     drawAlerts(alerts);
     drawSourceStatus(sources);
@@ -230,6 +248,41 @@ function drawDetections(detections) {
       </div>
     `;
   }).join('');
+}
+
+function drawHotspots(data) {
+  // Heat layer: per-detection [lat, lon, weight] points.
+  heatLayer.setLatLngs((data.heat || []).map(([lat, lon, w]) => [lat, lon, w]));
+
+  // DBSCAN clusters: a ground-radius circle per hotspot, sized by real radius and
+  // coloured by whether the cluster contains a threat.
+  hotspotsLayer.clearLayers();
+  (data.clusters || []).forEach(c => {
+    const color = c.harmful ? '#f87171' : '#38bdf8';
+    const circle = L.circle([c.lat, c.lon], {
+      radius: Math.max(c.radius_m, 40),   // floor so single-point clusters stay visible
+      color, fillColor: color, fillOpacity: 0.12, weight: 2, opacity: 0.85,
+    });
+    const breakdown = Object.entries(c.classes)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}: ${v}`).join('<br/>');
+    circle.bindPopup(`
+      <strong>${c.harmful ? '⚠ ' : ''}Hotspot — ${c.count} detection${c.count === 1 ? '' : 's'}</strong><br/>
+      <em>dominant: ${c.top_class}</em><br/>
+      ${breakdown}<br/>
+      <span style="font-size:0.82em; color:#94a3b8;">radius ≈ ${Math.round(c.radius_m)} m · peak conf ${(c.max_confidence * 100).toFixed(0)}%</span>
+    `);
+    // A small count badge at the centre so dense hotspots read at a glance.
+    const badge = L.marker([c.lat, c.lon], {
+      icon: L.divIcon({
+        className: 'hotspot-badge',
+        html: `<span style="background:${color};color:#0b1220;border-radius:10px;padding:1px 6px;font-weight:700;font-size:11px;">${c.count}</span>`,
+        iconSize: [0, 0],
+      }),
+    });
+    hotspotsLayer.addLayer(circle);
+    hotspotsLayer.addLayer(badge);
+  });
 }
 
 function drawStats(detections, alertSummary, sources, summary) {

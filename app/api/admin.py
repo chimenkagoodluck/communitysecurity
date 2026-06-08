@@ -1,4 +1,4 @@
-"""Admin: users, system stats, and data management (backup/restore/reset)."""
+
 import os
 import platform
 import shutil
@@ -21,7 +21,7 @@ router = APIRouter()
 
 _DB_PATH = PROJECT_ROOT / "data" / "cssa.db"
 _BACKUP_DIR = PROJECT_ROOT / "data" / "backups"
-_data_lock = threading.Lock()   # prevents concurrent backup/restore/reset
+_data_lock = threading.Lock()   
 
 
 @router.get("/users", response_model=list[UserOut])
@@ -68,7 +68,7 @@ def system_info(db: Session = Depends(get_db), _: User = Depends(get_current_use
     }
 
 
-# ── Data Management ──────────────────────────────────────────────────────────
+
 
 @router.get("/data/backups")
 def list_backups(_: User = Depends(get_current_user)):
@@ -98,14 +98,7 @@ def create_backup(_: User = Depends(get_current_user)):
 
 @router.post("/data/reset")
 def reset_database(_: User = Depends(get_current_user)):
-    """
-    Auto-backup, then wipe ALL data INCLUDING users — the database is left
-    completely empty. After this you sign up again at /signup, and the first
-    account created becomes the new administrator. No demo data is created.
-
-    Uses SQL DELETE instead of file deletion so the operation works on Windows
-    even while the database file is held open by the current request session.
-    """
+   
     if not _data_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Another data operation is in progress")
     try:
@@ -116,15 +109,14 @@ def reset_database(_: User = Depends(get_current_user)):
                 w.request_stop()
             _workers.clear()
 
-        # 2. Auto-backup before wiping (reading the file is always safe on Windows)
+       
         backup_name = None
         if _DB_PATH.exists():
             _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
             backup_name = f"cssa_{datetime.now().strftime('%Y%m%d_%H%M%S')}_pre_reset.db"
             shutil.copy2(_DB_PATH, _BACKUP_DIR / backup_name)
 
-        # 3. Wipe all rows via SQL — never touch the file, so Windows file
-        #    locks (held by the current request session) are not an issue.
+       
         with engine.begin() as conn:
             conn.execute(text("PRAGMA foreign_keys = OFF"))
             for tbl in ("alerts", "detections", "subscribers", "geofences", "sources", "users"):
@@ -143,14 +135,7 @@ def reset_database(_: User = Depends(get_current_user)):
 
 @router.post("/data/restore/{backup_name}")
 def restore_backup(backup_name: str, _: User = Depends(get_current_user)):
-    """
-    Restore the database from a backup.
-    Auto-saves the current state first so nothing is lost.
-
-    Uses SQLite ATTACH DATABASE to copy rows from the backup file into the
-    live database without ever overwriting the locked file on disk — this
-    avoids the Windows PermissionError that occurs when a file is in use.
-    """
+    
     if not backup_name.endswith(".db") or "/" in backup_name or "\\" in backup_name or ".." in backup_name:
         raise HTTPException(status_code=400, detail="Invalid backup name")
     backup_path = _BACKUP_DIR / backup_name
@@ -167,16 +152,14 @@ def restore_backup(backup_name: str, _: User = Depends(get_current_user)):
                 w.request_stop()
             _workers.clear()
 
-        # 2. Backup current state first (read-only copy — safe on Windows)
+        
         pre_backup = None
         if _DB_PATH.exists():
             _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
             pre_backup = f"cssa_{datetime.now().strftime('%Y%m%d_%H%M%S')}_pre_restore.db"
             shutil.copy2(_DB_PATH, _BACKUP_DIR / pre_backup)
 
-        # 3. Use SQLite ATTACH to copy all rows from the backup into the live
-        #    database. This modifies the file contents via SQL rather than
-        #    replacing the file, so Windows file locks are not an issue.
+      
         bp = str(backup_path).replace("\\", "/")
         tables = ["users", "sources", "detections", "alerts", "subscribers", "geofences"]
         with engine.begin() as conn:
@@ -187,7 +170,7 @@ def restore_backup(backup_name: str, _: User = Depends(get_current_user)):
                 try:
                     conn.execute(text(f"INSERT INTO main.{tbl} SELECT * FROM bk.{tbl}"))
                 except Exception:
-                    pass  # table may not exist in older backups — skip safely
+                    pass  
             conn.execute(text("DETACH DATABASE bk"))
             conn.execute(text("PRAGMA foreign_keys = ON"))
 
@@ -213,7 +196,7 @@ def delete_backup(backup_name: str, _: User = Depends(get_current_user)):
 
 @router.get("/metrics")
 def metrics(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    """Per-class + per-source detection metrics for the admin charts."""
+    
     by_class = dict(
         db.query(Detection.threat_class, func.count(Detection.id))
         .group_by(Detection.threat_class).all()

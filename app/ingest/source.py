@@ -1,11 +1,4 @@
-"""VideoSource — source-agnostic video reader.
 
-PATCHED:
-  - Uses CAP_DSHOW backend for webcams on Windows -> opens in ~1s instead of
-    10-60s with the default MSMF backend (fixes the "no signal for a minute").
-  - Adds a small warm-up read after open so the first real frame is ready.
-  - close() now releases robustly and tolerates being called twice.
-"""
 from __future__ import annotations
 
 import sys
@@ -32,13 +25,7 @@ _IS_WINDOWS = sys.platform.startswith("win")
 
 
 def normalize_locator(locator: str) -> str:
-    """Clean a user-supplied locator.
-
-    Windows Explorer's "Copy as path" wraps the path in double quotes, and users
-    sometimes paste those quotes in. OpenCV then treats the quotes as part of the
-    filename and silently fails to open. Strip surrounding whitespace and a single
-    matching pair of wrapping quotes.
-    """
+    
     s = (locator or "").strip()
     if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
         s = s[1:-1].strip()
@@ -65,15 +52,7 @@ class VideoSource:
 
     @staticmethod
     def _safe_to_scan() -> bool:
-        """True if at most one ingest worker is alive (i.e. only the caller).
-
-        Probing webcam indices means briefly opening captures; doing that while
-        *another* worker streams a device can hard-crash the interpreter on Windows
-        (the single-handle rule). The worker calling open() is itself counted as one
-        live worker, so we allow the scan only when the live-worker count is <= 1.
-        With other workers running we skip the scan and let the configured index
-        fail loudly instead.
-        """
+       
         try:
             from app.ingest.worker import _workers, _workers_lock
         except Exception:
@@ -100,8 +79,7 @@ class VideoSource:
     def open(self) -> None:
         if self._cap is not None and self._cap.isOpened():
             return
-        # Defensive: strip wrapping quotes/whitespace so a path pasted via
-        # "Copy as path" (which adds quotes) still opens.
+      
         self.locator = normalize_locator(self.locator)
         if self.kind == "webcam":
             try:
@@ -111,11 +89,7 @@ class VideoSource:
 
             cap = self._open_webcam_index(index)
             if cap is None and self._safe_to_scan():
-                # The configured index isn't present on this machine (common when a
-                # source was created on a different laptop). Fall back to the first
-                # camera that actually opens so "the system has a camera" just works.
-                # Guarded by _safe_to_scan() so we never probe a device another live
-                # worker may hold (the single-handle rule — see CLAUDE.md).
+                
                 for alt in range(_WEBCAM_SCAN_RANGE):
                     if alt == index:
                         continue
@@ -144,7 +118,7 @@ class VideoSource:
         self._cap = cap
         self._native_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-        # Warm-up: discard the first couple of frames so the sensor stabilises.
+        
         for _ in range(2):
             self._cap.read()
 

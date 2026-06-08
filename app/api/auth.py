@@ -1,4 +1,3 @@
-"""Auth endpoints + dependency."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -19,11 +18,7 @@ def _resolve_token(
     request: Request = None,
     token_query: Optional[str] = Query(None, alias="token"),
 ) -> str:
-    """
-    Accept token from any of:
-      - Authorization: Bearer <token>     (default for fetch/XHR)
-      - ?token=<token>                    (for <img src> live video — browser can't set headers)
-    """
+    
     if credentials and credentials.credentials:
         return credentials.credentials
     if token_query:
@@ -58,12 +53,7 @@ def require_role(*roles: UserRole):
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    """
-    Self-service signup. The database creates its own tables on startup, so the
-    first person to register becomes the administrator (bootstrap); everyone who
-    signs up after that is an operator. Returns a token so the user is logged in
-    immediately. Role is assigned server-side and cannot be chosen by the client.
-    """
+    
     email = payload.email.strip().lower()
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=400, detail="Email already registered")

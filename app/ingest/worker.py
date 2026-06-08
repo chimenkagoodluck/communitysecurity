@@ -1,14 +1,3 @@
-"""
-Per-source ingestion worker.
-
-For each frame:
-  1. Run YOLOv8 spatial detection
-  2. Run fire detection
-  3. Persist detections to DB
-  4. Annotate the frame with bboxes + labels
-  5. Push the annotated JPEG into the frame store (consumed by MJPEG endpoint)
-  6. If any high-confidence detection, create an alert
-"""
 from __future__ import annotations
 
 import threading
@@ -30,11 +19,10 @@ from app.models import (
     Alert, AlertSeverity, AlertStatus, Detection, ModelSource, Source, SourceStatus,
 )
 
-# A harmful detection must clear this confidence floor before it raises an alert.
+
 HARMFUL_ALERT_FLOOR = 0.40
 
-# Per-alert-key cooldown so a weapon held in view doesn't flood the alerts table
-# (the worker runs at a few fps, so without this it would create alerts every frame).
+
 ALERT_COOLDOWN_SECONDS = 15.0
 
 PERSON_CLASSES = {"person", "armed-person"}
@@ -45,14 +33,11 @@ class IngestWorker(threading.Thread):
         super().__init__(daemon=True, name=f"ingest-{source_id[:8]}")
         self.source_id = source_id
         self.target_fps = target_fps or settings.INGEST_TARGET_FPS
-        # NOTE: must NOT be named _stop — threading.Thread has an internal _stop()
-        # method in Python 3.11 that is called by join(). Naming our event _stop
-        # overwrites that method, causing "TypeError: 'Event' object is not callable"
-        # on the second Start (when start_worker calls existing.join()).
+        
         self._shutdown_event = threading.Event()
         self._fire = FireDetector()
-        self._weapon_gate = WeaponGate()  # temporal persistence -> suppresses flickering weapon FPs
-        self._last_alert_at: dict[str, float] = {}  # alert-key -> monotonic time
+        self._weapon_gate = WeaponGate()  
+        self._last_alert_at: dict[str, float] = {}  
 
     def request_stop(self) -> None:
         self._shutdown_event.set()
@@ -94,8 +79,7 @@ class IngestWorker(threading.Thread):
             if self._shutdown_event.is_set():
                 return
 
-            # Single unified detection pass (YOLO + weapon model + fire +
-            # armed-person escalation), shared with image/video upload.
+          
             try:
                 annotated, detections = analyze_frame(
                     frame, fire_detector=self._fire, weapon_gate=self._weapon_gate)
@@ -103,8 +87,7 @@ class IngestWorker(threading.Thread):
                 logger.warning(f"[{self.name}] analyze error: {exc}")
                 annotated, detections = frame, []
 
-            # Push annotated frame to the live-stream store BEFORE persistence,
-            # so the UI feels snappy even if DB is slow.
+           
             try:
                 ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
@@ -140,7 +123,7 @@ class IngestWorker(threading.Thread):
                         and self._cooldown_ok(d["class"], now_mono):
                     db.add(self._build_alert(det, d, src))
 
-            # Crowd proxy: several people clustered together -> disturbance alert.
+           
             if self._person_cluster(persons) >= settings.CROWD_MIN_PERSONS \
                     and self._cooldown_ok("crowd", now_mono):
                 db.add(self._build_crowd_alert(persons, src))
@@ -240,26 +223,23 @@ class IngestWorker(threading.Thread):
             db.close()
 
 
-# Module-level worker registry
+
 _workers: dict[str, IngestWorker] = {}
 _workers_lock = threading.Lock()
 
 
 def start_worker(source_id: str) -> bool:
-    # Grab and evict any previous worker outside the lock so we can join()
-    # without holding the lock for up to 6 seconds.
+    
     with _workers_lock:
         existing = _workers.get(source_id)
         if existing and existing.is_alive():
             return False  # already streaming
-        # Remove from registry before we release the lock.
+       
         if existing is not None:
             existing.request_stop()
             _workers.pop(source_id, None)
 
-    # Wait for the old thread to release the camera handle before opening a new one.
-    # join() is safe here because _stop (the Thread-internal method) is no longer
-    # shadowed — we renamed our event to _shutdown_event.
+   
     if existing is not None:
         existing.join(timeout=6.0)
 

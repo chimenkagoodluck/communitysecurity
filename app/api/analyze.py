@@ -1,10 +1,4 @@
-"""Upload-and-analyze endpoints: image (BLOCK 1) and video (BLOCK 4).
 
-POST /api/analyze/image  — multipart upload, runs analyze_frame, returns the
-annotated image (base64 data URL) + a detection list + summary.
-POST /api/analyze/video  — multipart upload, samples every Nth frame, annotates,
-writes a browser-playable (H.264) MP4, returns a detection timeline.
-"""
 import base64
 import shutil
 import subprocess
@@ -36,6 +30,20 @@ def _max_severity(severities) -> str | None:
     return max(severities, key=lambda s: _SEVERITY_RANK.get(s, -1), default=None)
 
 
+def _decode_with_pillow(raw: bytes) -> "np.ndarray | None":
+    
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+    except Exception as exc:
+        logger.warning(f"Pillow fallback decode failed: {exc}")
+        return None
+
+
 def _summarize(detections: list[dict]) -> dict:
     harmful = [d for d in detections if d["harmful"]]
     return {
@@ -58,10 +66,16 @@ async def analyze_image(
     arr = np.frombuffer(raw, dtype=np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if frame is None:
-        raise HTTPException(status_code=400, detail="Could not decode image — upload a JPG or PNG.")
+        
+        frame = _decode_with_pillow(raw)
+    if frame is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not decode image — supported types: JPG, PNG, WebP, AVIF, HEIC.",
+        )
 
-    # Fresh fire detector per request so single-image state never leaks between uploads.
-    annotated, detections = analyze_frame(frame, fire_detector=FireDetector())
+    
+    annotated, detections = analyze_frame(frame, fire_detector=FireDetector(), high_recall=True)
 
     ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
     if not ok:
@@ -121,8 +135,8 @@ def _process_video(in_path: str, out_id: str) -> dict:
     writer = cv2.VideoWriter(str(tmp_mp4v), cv2.VideoWriter_fourcc(*"mp4v"),
                              float(out_fps), (width, height))
 
-    fire = FireDetector()  # stateful across the video for flicker-based fire scoring
-    weapon_gate = WeaponGate()  # temporal persistence -> suppresses flickering weapon FPs
+    fire = FireDetector()  
+    weapon_gate = WeaponGate()  
     timeline: list[dict] = []
     all_severities: list[str] = []
     class_totals: dict[str, int] = {}
@@ -150,7 +164,7 @@ def _process_video(in_path: str, out_id: str) -> dict:
                     label = "+".join(sorted({d["class"] for d in dets}))
                     harmful = any(d["harmful"] for d in dets)
                     sev = _max_severity(d["severity"] for d in dets)
-                    # Collapse consecutive identical labels into one timeline entry.
+                    
                     if timeline and timeline[-1]["label"] == label:
                         timeline[-1]["t_end"] = round(t, 2)
                     else:
@@ -163,7 +177,7 @@ def _process_video(in_path: str, out_id: str) -> dict:
         writer.release()
         cap.release()
 
-    # Transcode to browser-playable H.264; fall back to the mp4v file if ffmpeg is absent.
+    
     final_path = _MEDIA_DIR / f"{out_id}.mp4"
     if _transcode_h264(tmp_mp4v, final_path):
         tmp_mp4v.unlink(missing_ok=True)
@@ -171,7 +185,7 @@ def _process_video(in_path: str, out_id: str) -> dict:
         playable = True
     else:
         video_name = tmp_mp4v.name
-        playable = bool(_FFMPEG)  # mp4v may not play in all browsers
+        playable = bool(_FFMPEG)  
 
     return {
         "video_url": f"/media/{video_name}",
@@ -206,7 +220,7 @@ async def analyze_video(
             raise HTTPException(status_code=400, detail="Empty file")
         tmp.write(data)
         tmp.close()
-        # cv2 + ffmpeg are blocking — run off the event loop.
+        
         result = await run_in_threadpool(_process_video, tmp.name, out_id)
         result["filename"] = file.filename
         return result

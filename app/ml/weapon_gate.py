@@ -1,21 +1,3 @@
-"""
-Temporal persistence gate for weapon detections.
-
-The off-the-shelf weapon model fires confident false positives on drone/aerial
-footage (a "knife" on bare pavement, a phone read as a "gun"). These hallucinations
-*flicker* — they pop up in one sampled frame and vanish the next, jumping around the
-scene. A genuinely-held weapon, by contrast, persists across consecutive frames at
-roughly the same spot.
-
-WeaponGate exploits that: it remembers the last N sampled frames and only *confirms*
-a weapon detection that has appeared in at least K of them near the same location.
-One instance per stream (per uploaded video / per live worker), mirroring how the
-stateful FireDetector is kept per stream. This is the temporal half of the scoring
-the project documents (the previously-stubbed temporal_score).
-
-Call confirm() once per sampled frame — even with an empty list — so the window keeps
-sliding and a frame with no weapon correctly counts as a miss.
-"""
 from __future__ import annotations
 
 from collections import deque
@@ -43,10 +25,7 @@ class WeaponGate:
         return bbox["x"] + bbox["w"] / 2, bbox["y"] + bbox["h"] / 2
 
     def confirm(self, weapon_dets: list[dict]) -> list[dict]:
-        """Return only the weapon detections that persist across the recent window.
-
-        Must be called once per sampled frame (pass [] when there are none).
-        """
+        
         current: list[tuple[str, float, float]] = []
         for d in weapon_dets:
             bb = d.get("bbox")

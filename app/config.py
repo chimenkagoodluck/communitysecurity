@@ -1,4 +1,4 @@
-"""Application configuration loaded from environment variables."""
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -33,38 +33,34 @@ class Settings(BaseSettings):
     TEMPORAL_ANOMALY_THRESHOLD: float = 0.55
     FUSION_ALERT_THRESHOLD: float = 0.55
 
-    # Dedicated weapon model (gun/knife). If the .pt file named here is not found
-    # in the project root, weapon detection is disabled and the system falls back
-    # to COCO 'knife' + person (still flagged as armed-person). See BLOCK 2 docs.
+   
     WEAPON_MODEL_PATH: str = "weapons.pt"
-    # Raised from 0.35: the off-the-shelf weapon .pt is trained on ground-level
-    # close-ups and hallucinates confidently on aerial/drone crowd footage.
+   
     WEAPON_CONFIDENCE_THRESHOLD: float = 0.50
 
-    # ── Weapon false-positive suppression ────────────────────────────────────
-    # (B) Require a weapon box to overlap a detected person — a knife floating on
-    #     empty pavement is a hallucination. Set False to disable.
+   
     WEAPON_REQUIRE_PERSON: bool = True
-    # (C) Temporal persistence: only surface a weapon seen in >= MIN of the last
-    #     WINDOW sampled frames, near the same spot (normalised centre distance).
-    #     Real weapons persist across frames; FPs flicker frame-to-frame.
+   
     WEAPON_PERSIST_WINDOW: int = 6
     WEAPON_PERSIST_MIN: int = 4
     WEAPON_MATCH_DIST: float = 0.12
+
+    
+    WEAPON_IMAGE_CONFIDENCE_THRESHOLD: float = 0.50
+    WEAPON_IMAGE_SCALES: list[int] = [640]
+    WEAPON_IMAGE_TTA: bool = False
 
     FUSION_ALPHA: float = 0.45
     FUSION_BETA: float = 0.40
     FUSION_GAMMA: float = 0.15
 
     INGEST_TARGET_FPS: int = 3
-    STREAM_FPS: int = 10  # MJPEG output rate
+    STREAM_FPS: int = 10  
+   
+    VIDEO_ANALYZE_FPS: int = 3      
+    VIDEO_MAX_SECONDS: int = 60     
 
-    # Video upload analysis (BLOCK 4)
-    VIDEO_ANALYZE_FPS: int = 3      # frames per second to actually run detection on
-    VIDEO_MAX_SECONDS: int = 60     # cap processing length so CPU-only stays responsive
-
-    # Crowd proxy (BLOCK 5): >= N people clustered within PROXIMITY (normalised
-    # box-centre distance, 0..1) raises a "crowd / disturbance" alert.
+   
     CROWD_MIN_PERSONS: int = 4
     CROWD_PROXIMITY_DIST: float = 0.45
 

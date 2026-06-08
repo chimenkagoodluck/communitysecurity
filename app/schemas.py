@@ -1,4 +1,3 @@
-"""Pydantic schemas for API I/O."""
 from __future__ import annotations
 
 from datetime import datetime

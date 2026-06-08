@@ -1,4 +1,4 @@
-"""ORM models for the Community Security Alert System."""
+
 from __future__ import annotations
 
 import enum

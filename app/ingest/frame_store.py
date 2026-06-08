@@ -1,17 +1,4 @@
-"""
-In-memory shared latest-frame store.
 
-The ingestion worker writes the most recent annotated frame for each source here.
-The MJPEG streaming endpoint reads from it. This decouples the camera reader from
-HTTP consumers, so we never compete for the webcam handle on Windows.
-
-Design:
-  - One slot per source_id, holding (jpeg_bytes, timestamp_seconds)
-  - Threadsafe via a single lock (the dict is read/written from many threads)
-  - Stale slot detection: if the worker dies, readers see "no recent frame"
-    and serve a placeholder.
-  - Two placeholder images: idle ("NO SIGNAL") and connecting ("INITIALISING…").
-"""
 from __future__ import annotations
 
 import threading

@@ -1,4 +1,4 @@
-"""FastAPI app entrypoint."""
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
     from app import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
     logger.info(f"Database ready at {settings.DATABASE_URL}")
-    # Preload YOLOv8 weights now so the first Start Monitoring call is instant.
+   
     import anyio
     from app.ml.yolo import get_model
     try:
@@ -48,8 +48,7 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 
-# Annotated video-analysis outputs are written here and served (with HTTP range
-# support, so the browser <video> can seek) from /media.
+
 _MEDIA_DIR = PROJECT_ROOT / "data" / "analyzed"
 _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(_MEDIA_DIR)), name="media")

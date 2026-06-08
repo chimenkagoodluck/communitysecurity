@@ -1,4 +1,4 @@
-"""Sources API: CRUD, probe, and live MJPEG streaming."""
+
 import time
 from datetime import datetime, timezone
 
@@ -69,8 +69,7 @@ def probe_source(
     src = db.query(Source).filter(Source.id == source_id).first()
     if not src:
         raise HTTPException(status_code=404, detail="Source not found")
-    # Never open a second VideoCapture while a worker already holds the handle —
-    # on Windows this can hard-crash the interpreter.
+
     if worker_status(source_id) == "running":
         return {
             "ok": True, "kind": src.kind.value, "locator": src.locator,
@@ -79,7 +78,7 @@ def probe_source(
         }
     vs = VideoSource.from_model(src)
     info = vs.probe()
-    # Only update last_error; don't change status here — probe is not monitoring.
+    
     src.last_error = None if info.get("ok") else info.get("error")
     db.commit()
     return info

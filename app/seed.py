@@ -1,14 +1,3 @@
-"""
-Database setup.
-
-Run once after install (optional — the app also creates its tables automatically
-on startup):
-    python -m app.seed
-
-This only creates the database tables. It does NOT create any users or demo data.
-The first person to sign up at /signup becomes the administrator; the database
-starts completely empty and fills up only through real use of the app.
-"""
 from app.db import Base, engine
 
 

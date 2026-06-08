@@ -1,4 +1,3 @@
-"""Fire / flame detection via HSV color + motion heuristic."""
 from __future__ import annotations
 
 from collections import deque
