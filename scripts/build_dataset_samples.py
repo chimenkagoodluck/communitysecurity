@@ -1,34 +1,4 @@
-"""
-Build dataset_samples/ — a small, *real and labelled* sample for the Community
-Security Alert System (CSSA) defense, covering the classes the supervisor named:
-guns, knives, machetes, and armed persons (a person boxed alongside a weapon).
 
-It pulls from three real, openly-licensed sources and converts every box into the
-same YOLO label format (`<class_id> <xc> <yc> <w> <h>`, normalised 0-1):
-
-  1. GUN / KNIFE  — Subh775/WeaponDetection            (Hugging Face, CC-BY-4.0)
-  2. ARMED-PERSON — Subh775/WeaponDetection_Grouped    (Hugging Face, CC-BY-4.0)
-                    classes GUN/KNIFE/PERSON; we keep images that contain BOTH a
-                    person box AND a weapon box -> genuine "armed person" samples.
-  3. MACHETE      — a Roboflow Universe machete dataset (needs a free API key)
-                    default: a-fadfk/machete-celurit (CC-BY-4.0). Skipped, with a
-                    clear message, if no key is supplied — we never fake a class.
-
-Sources 1 & 2 use the keyless Hugging Face datasets-server REST API. Source 3 uses
-the Roboflow REST export API (urllib only — no heavy SDK).
-
-Run (from the project root, venv active):
-    python scripts/build_dataset_samples.py                       # guns/knives + armed-person
-    python scripts/build_dataset_samples.py --roboflow-key KEY    # + machete
-    # or:  set ROBOFLOW_API_KEY=KEY  &&  python scripts/build_dataset_samples.py
-
-Output:
-    dataset_samples/
-      images/sample_001.jpg ...      (real images)
-      labels/sample_001.txt ...      (YOLO labels, normalised)
-      classes.txt                    (canonical class order)
-      README.md                      (per-source citation + honest class table)
-"""
 from __future__ import annotations
 
 import argparse
@@ -74,9 +44,7 @@ def canonical(name: str) -> str | None:
     return None  # Blood / Hand / Stabbing / violence / al -> skip
 
 
-# --------------------------------------------------------------------------- #
-# HTTP helpers (shared)                                                        #
-# --------------------------------------------------------------------------- #
+
 def _get_bytes(url: str, tries: int = 6) -> bytes:
    
     delay = 2.0
@@ -106,9 +74,7 @@ def _get_json(url: str) -> dict:
     return json.loads(_get_bytes(url))
 
 
-# --------------------------------------------------------------------------- #
-# Hugging Face datasets-server pulls                                           #
-# --------------------------------------------------------------------------- #
+
 def hf_category_names(dataset: str, config: str, split: str) -> list[str]:
     d = _get_json(f"{API}/first-rows?dataset={urllib.parse.quote(dataset)}"
                   f"&config={config}&split={split}")
@@ -186,9 +152,7 @@ def pull_hf(dataset: str, split: str, want: int, keep, scan_limit: int,
     return kept
 
 
-# --------------------------------------------------------------------------- #
-# Roboflow machete pull (REST export, urllib only)                            #
-# --------------------------------------------------------------------------- #
+
 def pull_roboflow_machete(workspace: str, project: str, version: int | None,
                           api_key: str, want: int, counter: "Counter") -> int:
     
@@ -291,9 +255,7 @@ def _parse_yaml_names(txt: str) -> list[str]:
     return names
 
 
-# --------------------------------------------------------------------------- #
-# Output writer                                                                #
-# --------------------------------------------------------------------------- #
+
 class Counter:
     """Writes sample_NNN.jpg/.txt sequentially and tallies per-class boxes."""
 
@@ -315,9 +277,7 @@ class Counter:
             self.armed_person_imgs += 1
 
 
-# --------------------------------------------------------------------------- #
-# Main                                                                         #
-# --------------------------------------------------------------------------- #
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--guns", type=int, default=32, help="gun images to keep")
@@ -339,9 +299,7 @@ def main() -> None:
     counter = Counter()
     sources: dict[str, str] = {}
 
-    # 1) KNIFE then GUN. Knives are rarer in this source, so seek them first
-    #    (keep knife images), then fill the rest with guns — otherwise the first
-    #    N gun-or-knife images are all firearms and the knife class ends up empty.
+
     print("\n== Source 1a: knives (Subh775/WeaponDetection) ==")
     n_k = pull_hf(
         HF_GUNS, "train", args.knives,
@@ -354,7 +312,7 @@ def main() -> None:
         scan_limit=args.scan_limit, counter=counter)
     sources["guns_knives"] = f"{n_g} gun + {n_k} knife images"
 
-    # 2) ARMED-PERSON  (keep images that have a PERSON box AND a weapon box)
+ 
     print("\n== Source 2: armed-person (Subh775/WeaponDetection_Grouped) ==")
     n_ap = pull_hf(
         HF_ARMED, "train", args.armed,
@@ -363,7 +321,7 @@ def main() -> None:
         scan_limit=args.scan_limit, counter=counter)
     sources["armed_person"] = f"{n_ap} images"
 
-    # 3) MACHETE  (Roboflow — only if a key is supplied)
+
     print("\n== Source 3: machete (Roboflow) ==")
     if args.roboflow_key:
         try:
